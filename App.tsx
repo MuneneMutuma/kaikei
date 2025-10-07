@@ -1,45 +1,50 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+import React, { useState } from 'react';
+import { SafeAreaView } from 'react-native';
+import SetupScreen from './src/screens/SetupScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import AddExpenseScreen from './src/screens/AddExpenseScreen';
+import SmsReaderScreen from './src/screens/SmsReaderScreen';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+type Screen = 'setup' | 'home' | 'addExpense' | 'smsReader';
+
+const App = () => {
+  const [userName, setUserName] = useState<string | null>(null);
+  const [persona, setPersona] = useState<string | null>(null);
+  const [currentScreen, setCurrentScreen] = useState<Screen>('setup');
+
+  const handleSetupComplete = (name: string, selectedPersona: string) => {
+    console.log(`User setup complete: ${name} (${selectedPersona})`);
+    setUserName(name);
+    setPersona(selectedPersona);
+    setCurrentScreen('home');
+  };
+
+  const handleNavigate = (screen: Screen) => {
+    console.log(`Navigating to ${screen}`);
+    setCurrentScreen(screen);
+  };
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
+    <SafeAreaView style={{ flex: 1 }}>
+      {currentScreen === 'setup' && <SetupScreen onComplete={handleSetupComplete} />}
+      {currentScreen === 'home' && (
+        <HomeScreen
+          name={userName!}
+          persona={persona!}
+          onNavigate={handleNavigate}
+        />
+      )}
+      {currentScreen === 'addExpense' && (
+        <AddExpenseScreen
+          onBack={() => handleNavigate('home')}
+        />
+      )}
+      {currentScreen === 'smsReader' && (
+        <SmsReaderScreen />
+      )}
+    </SafeAreaView>
   );
-}
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
+};
 
 export default App;
