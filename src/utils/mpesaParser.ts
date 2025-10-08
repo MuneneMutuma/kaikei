@@ -38,6 +38,23 @@ const normalizeText = (text: string) =>
 export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   const text = normalizeText(raw);
 
+    // Handle known failure messages that don't change balances
+    const failurePatterns = [
+      /unable to process your request/i,                         // Another transaction taking place
+      /unable to complete the transaction/i,                     // Failed transaction
+      /you do not have sufficient funds/i,                       // Insufficient balance
+      /insufficient funds in your/i,                             // Insufficient funds
+      /transaction could not be completed/i,                     // Generic failure
+      /transaction failed/i,                                     // Explicit failure notice,
+      /you have entered the wrong PIN/i                  // Wrong PIN
+    ];
+
+    // If message matches any failure pattern, drop it
+    if (failurePatterns.some((p) => p.test(text))) {
+      return null; // Ignore failed / incomplete transactions
+    }
+
+
   // Extract TX_ID
   const tx_id = text.match(/^([A-Z0-9]{6,})\s+Confirmed/i)?.[1] || 'UNKNOWN';
 
