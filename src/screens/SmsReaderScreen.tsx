@@ -134,21 +134,12 @@ export default function SMSReaderScreen() {
           </Text>
         </View>
 
-        <View style={styles.row}>
-          <Text style={styles.label}>Balance:</Text>
-          <Text style={styles.value}>
-            {item.balance ? `Ksh ${item.balance.toFixed(2)}` : "—"}
-          </Text>
-        </View>
-
-        {item.other_balance && (
-          <View style={styles.row}>
-            <Text style={styles.label}>Other Bal:</Text>
-            <Text style={styles.value}>
-              {`Ksh ${item.other_balance.toFixed(2)}`}
-            </Text>
+        {Object.entries(item.balances).map(([key, value]) => (
+          <View style={styles.row} key={key}>
+            <Text style={styles.label}>{`${key.toUpperCase()} bal:`}</Text>
+            <Text style={styles.value}>Ksh {value.toLocaleString()}</Text>
           </View>
-        )}
+        ))}
 
         <Text style={styles.date}>
           {item.date} {item.time && `at ${item.time}`}
