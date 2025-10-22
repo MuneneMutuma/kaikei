@@ -4,7 +4,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-nati
 type HomeScreenProps = {
   name: string;
   persona: string;
-  onNavigate: (screen: 'home' | 'addExpense' | 'setup') => void;
+  onNavigate: (screen: 'Home' | 'AddExpense' | 'Setup' | 'SmsReader') => void;
 };
 
 const HomeScreen: React.FC<HomeScreenProps> = ({ name, persona, onNavigate }) => {
@@ -18,7 +18,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ name, persona, onNavigate }) =>
       <View style={styles.actionContainer}>
         <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: '#4CAF50' }]}
-          onPress={() => onNavigate('addExpense')}
+          onPress={() => onNavigate('AddExpense')}
         >
           <Text style={styles.actionText}>➕ Add Expense</Text>
         </TouchableOpacity>
@@ -32,7 +32,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ name, persona, onNavigate }) =>
 
         <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: '#673AB7' }]}
-          onPress={() => onNavigate('smsReader')}
+          onPress={() => onNavigate('SmsReader')}
         >
           <Text style={styles.actionText}>💬 Read M-Pesa SMS</Text>
         </TouchableOpacity>
