@@ -1,49 +1,75 @@
 import React, { useState } from 'react';
-import { SafeAreaView } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
 import SetupScreen from './src/screens/SetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
 
+export type RootStackParamList = {
+  Setup: undefined;
+  Home: { name: string; persona: string };
+  AddExpense: undefined;
+  SmsReader: undefined;
+};
 
-type Screen = 'setup' | 'home' | 'addExpense' | 'smsReader';
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const App = () => {
   const [userName, setUserName] = useState<string | null>(null);
   const [persona, setPersona] = useState<string | null>(null);
-  const [currentScreen, setCurrentScreen] = useState<Screen>('setup');
 
-  const handleSetupComplete = (name: string, selectedPersona: string) => {
+  const handleSetupComplete = (name: string, selectedPersona: string, navigation: any) => {
     console.log(`User setup complete: ${name} (${selectedPersona})`);
     setUserName(name);
     setPersona(selectedPersona);
-    setCurrentScreen('home');
-  };
-
-  const handleNavigate = (screen: Screen) => {
-    console.log(`Navigating to ${screen}`);
-    setCurrentScreen(screen);
+    navigation.replace('Home', { name, persona: selectedPersona });
   };
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
-      {currentScreen === 'setup' && <SetupScreen onComplete={handleSetupComplete} />}
-      {currentScreen === 'home' && (
-        <HomeScreen
-          name={userName!}
-          persona={persona!}
-          onNavigate={handleNavigate}
-        />
-      )}
-      {currentScreen === 'addExpense' && (
-        <AddExpenseScreen
-          onBack={() => handleNavigate('home')}
-        />
-      )}
-      {currentScreen === 'smsReader' && (
-        <SmsReaderScreen />
-      )}
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <Stack.Navigator initialRouteName="Setup">
+          <Stack.Screen
+            name="Setup"
+            options={{ headerShown: false }}
+          >
+            {({ navigation }) => (
+              <SetupScreen
+                onComplete={(name, persona) => handleSetupComplete(name, persona, navigation)}
+              />
+            )}
+          </Stack.Screen>
+
+          <Stack.Screen
+            name="Home"
+            options={{ title: 'Home', headerBackVisible: false }}
+          >
+            {({ route, navigation }) => (
+              <HomeScreen
+                name={route.params.name}
+                persona={route.params.persona}
+                onNavigate={(screen) => navigation.navigate(screen as any)}
+              />
+            )}
+          </Stack.Screen>
+
+          <Stack.Screen
+            name="AddExpense"
+            component={AddExpenseScreen}
+            options={{ title: 'Add Expense' }}
+          />
+
+          <Stack.Screen
+            name="SmsReader"
+            component={SmsReaderScreen}
+            options={{ title: 'SMS Reader' }}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 };
 

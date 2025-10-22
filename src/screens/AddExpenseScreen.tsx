@@ -1,216 +1,202 @@
-import React, {useEffect, useState} from 'react';
+import React, { useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  PermissionsAndroid,
+  KeyboardAvoidingView,
   Platform,
-  Alert,
-} from 'react-native';
-import Voice, {
-  SpeechResultsEvent,
-  SpeechErrorEvent,
-  SpeechStartEvent,
-  SpeechEndEvent,
-} from '@react-native-voice/voice';
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useNavigation } from "@react-navigation/native";
+
+
+import AmountStep from "./AmountStep";
+import CategoryStep from "./CategoryStep";
+import NoteStep from "./NoteStep";
+import VoiceInput from "./VoiceInput";
+
+type Category = { id: string; name: string; color: string };
+type Expense = { id: string; amount: number; category: string; note?: string; date: string };
 
 const AddExpenseScreen: React.FC = () => {
-  const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [languageTried, setLanguageTried] = useState<'en-KE' | 'sw-KE' | null>(null);
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    console.log('🔧 Voice listeners attached');
-    Voice.onSpeechStart = onSpeechStart;
-    Voice.onSpeechEnd = onSpeechEnd;
-    Voice.onSpeechResults = onSpeechResults;
-    Voice.onSpeechError = onSpeechError;
+  const [mode, setMode] = useState<"voice" | "form">("form");
+  const [step, setStep] = useState<number>(1);
+  const [amount, setAmount] = useState<string>("");
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [note, setNote] = useState<string>("");
 
-    return () => {
-      console.log('🧹 Cleanup');
-      Voice.destroy().then(() => Voice.removeAllListeners());
+  const [hint, setHint] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setAmount("");
+    setSelectedCategory(null);
+    setNote("");
+    setStep(1);
+  };
+
+  const saveExpense = (payload?: Partial<Expense>) => {
+    // Build canonical expense object
+    const expense: Expense = {
+      id: Date.now().toString(),
+      amount: payload?.amount ?? parseFloat(amount || "0"),
+      category: payload?.category ?? selectedCategory?.name ?? "Other",
+      note: payload?.note ?? note.trim(),
+      date: new Date().toISOString(),
     };
-  }, []);
 
-  const onSpeechStart = (e: SpeechStartEvent) => console.log('🎙️ onSpeechStart:', e);
-  const onSpeechEnd = (e: SpeechEndEvent) => {
-    console.log('🛑 onSpeechEnd:', e);
-    setIsRecording(false);
+    // TODO: persist locally (MMKV / SQLite / AsyncStorage) and/or send to analyzer
+    console.log("Saved expense:", expense);
+
+    // show ephemeral hint
+    setHint("Expense logged");
+    setTimeout(() => setHint(null), 2200);
+
+    resetForm();
   };
 
-  const onSpeechResults = async (e: SpeechResultsEvent) => {
-    console.log(`💬 onSpeechResults (${languageTried}):`, e);
-    const text = e.value?.join(' ') || '';
-    console.log('📝 Transcript:', text);
-
-    if (!text && languageTried === 'en-KE') {
-      // Retry Swahili if English failed
-      console.log('🔁 English results empty → retrying with Swahili...');
-      await retryWithSwahili();
-      return;
-    }
-
-    if (languageTried === 'sw-KE') {
-      console.log('🈶 Using Swahili transcript.');
-    }
-
-    setTranscript(text);
-    setIsRecording(false);
+  const nextStep = () => {
+    if (step === 1 && !amount) return;
+    setStep((s) => Math.min(3, s + 1));
   };
-
-  const onSpeechError = async (e: SpeechErrorEvent) => {
-    console.log('❌ onSpeechError:', e);
-    setError(JSON.stringify(e.error));
-    setIsRecording(false);
-
-    if (languageTried === 'en-KE') {
-      console.log('⚠️ English recognition failed → retrying Swahili');
-      await retryWithSwahili();
-    }
-  };
-
-  const requestAudioPermission = async (): Promise<boolean> => {
-    if (Platform.OS !== 'android') return true;
-    try {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        {
-          title: 'Microphone Permission',
-          message: 'This app needs access to your microphone to record audio.',
-          buttonPositive: 'OK',
-        },
-      );
-      const isGranted = granted === PermissionsAndroid.RESULTS.GRANTED;
-      console.log('🎤 Mic permission granted?', isGranted);
-      return isGranted;
-    } catch (err) {
-      console.warn('Permission error', err);
-      return false;
-    }
-  };
-
-  const startRecording = async (lang: 'en-KE' | 'sw-KE' = 'en-KE') => {
-    setError(null);
-    setTranscript('');
-    console.log(`▶️ Starting recording in ${lang}...`);
-
-    const ok = await requestAudioPermission();
-    if (!ok) {
-      Alert.alert('Permission denied', 'Cannot start recording without microphone permission');
-      return;
-    }
-
-    try {
-      await Voice.start(lang);
-      setLanguageTried(lang);
-      setIsRecording(true);
-      console.log('🎧 Recording started with language:', lang);
-    } catch (e) {
-      console.error('startRecording error', e);
-      setError(String(e));
-    }
-  };
-
-  const retryWithSwahili = async () => {
-    console.log('🔁 Retrying speech recognition with Swahili...');
-    try {
-      await Voice.stop();
-      await Voice.destroy();
-      await new Promise(res => setTimeout(res, 500));
-      await startRecording('sw-KE');
-    } catch (err) {
-      console.error('retryWithSwahili error', err);
-      setError(String(err));
-    }
-  };
-
-  const stopRecording = async () => {
-    console.log('⏹️ Stopping recording...');
-    try {
-      await Voice.stop();
-    } catch (e) {
-      console.warn('stopRecording error', e);
-    } finally {
-      setIsRecording(false);
-      console.log('📴 Recording stopped.');
-    }
-  };
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording('en-KE');
-    }
-  };
+  const prevStep = () => setStep((s) => Math.max(1, s - 1));
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Add Expense — Auto Voice</Text>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={[styles.container, { paddingTop: insets.top + 16 }]}
+    >
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
 
-      <TouchableOpacity
-        accessibilityRole="button"
-        style={[styles.recordButton, isRecording && styles.recording]}
-        onPress={toggleRecording}>
-        <Text style={styles.buttonText}>{isRecording ? 'Stop' : 'Record'}</Text>
-      </TouchableOpacity>
+        <Text style={styles.title}>Add Expense</Text>
 
-      <View style={styles.infoBox}>
-        <Text style={styles.label}>Status: {isRecording ? 'Recording…' : 'Idle'}</Text>
-        <Text style={styles.label}>Transcript:</Text>
-        <Text style={styles.transcript}>{transcript || '—'}</Text>
-        {error ? <Text style={styles.error}>Error: {error}</Text> : null}
+        <View style={styles.modeToggle}>
+          <TouchableOpacity
+            onPress={() => setMode("form")}
+            style={[styles.modeButton, mode === "form" && styles.modeActive]}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.modeText, mode === "form" && styles.modeTextActive]}>🖊️ Tap</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setMode("voice")}
+            style={[styles.modeButton, mode === "voice" && styles.modeActive]}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.modeText, mode === "voice" && styles.modeTextActive]}>🎙️ Voice</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <Text style={styles.hint}>
-        Language auto-switches between English (en-KE) and Swahili (sw-KE) depending on results.
-      </Text>
-    </View>
+      {mode === "voice" ? (
+        <VoiceInput
+          onSave={(payload) => {
+            saveExpense(payload);
+          }}
+        />
+      ) : (
+        <>
+          {/* Step components shown sequentially */}
+          {step === 1 && <AmountStep amount={amount} setAmount={setAmount} onQuickSet={(v) => setAmount(String(v))} />}
+
+          {step === 2 && (
+            <CategoryStep
+              selectedCategory={selectedCategory}
+              onSelect={(c) => setSelectedCategory(c)}
+            />
+          )}
+
+          {step === 3 && <NoteStep note={note} setNote={setNote} />}
+
+          {/* bottom nav */}
+          <View style={styles.navContainer}>
+            {step > 1 ? (
+              <TouchableOpacity onPress={prevStep} style={styles.navAlt}>
+                <Text style={styles.navAltText}>Back</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.navAltPlaceholder} />
+            )}
+
+            {step < 3 ? (
+              <TouchableOpacity
+                onPress={nextStep}
+                style={[styles.navPrimary, step === 1 && !amount ? styles.navDisabled : undefined]}
+                disabled={step === 1 && !amount}
+              >
+                <Text style={styles.navPrimaryText}>Next</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={() => {
+                  if (!amount || !selectedCategory) {
+                    setHint("Enter amount and choose category");
+                    setTimeout(() => setHint(null), 2000);
+                    return;
+                  }
+                  saveExpense();
+                }}
+                style={[styles.navPrimary, !amount || !selectedCategory ? styles.navDisabled : undefined]}
+                disabled={!amount || !selectedCategory}
+              >
+                <Text style={styles.navPrimaryText}>Save</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
+      )}
+
+      {/* ephemeral hint / toast */}
+      {hint && (
+        <View style={styles.hintBox}>
+          <Text style={styles.hintText}>{hint}</Text>
+        </View>
+      )}
+    </KeyboardAvoidingView>
   );
 };
 
-export default AddExpenseScreen;
-
 const styles = StyleSheet.create({
-  container: {flex: 1, padding: 20, alignItems: 'center', backgroundColor: '#fff'},
-  title: {fontSize: 20, fontWeight: '600', marginVertical: 12},
-  recordButton: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: '#e33',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: 20,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 6},
-    shadowOpacity: 0.2,
-    elevation: 6,
-  },
-  recording: {backgroundColor: '#b00', transform: [{scale: 0.98}]},
-  buttonText: {color: '#fff', fontSize: 18, fontWeight: '700'},
-  infoBox: {
-    width: '100%',
-    marginTop: 10,
-    padding: 12,
+  container: { flex: 1, backgroundColor: "#F6F7F9", paddingHorizontal: 16 },
+  headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  backBtn: { padding: 8 },
+  backText: { fontSize: 20, color: "#222" },
+  title: { flex: 1, fontSize: 22, fontWeight: "700", color: "#222", textAlign: "center" },
+  modeToggle: { flexDirection: "row", borderRadius: 8, overflow: "hidden" },
+  modeButton: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: "#EEE" },
+  modeActive: { backgroundColor: "#3F51B5" },
+  modeText: { color: "#333", fontWeight: "600" },
+  modeTextActive: { color: "#FFF" },
+
+  navContainer: { flexDirection: "row", marginTop: 12, marginBottom: 8 },
+  navAlt: { flex: 1, backgroundColor: "#E8E8E8", padding: 14, borderRadius: 10, marginRight: 8, alignItems: "center" },
+  navAltText: { color: "#222", fontSize: 16, fontWeight: "600" },
+  navAltPlaceholder: { flex: 1, marginRight: 8 },
+
+  navPrimary: { flex: 1, backgroundColor: "#3F51B5", padding: 14, borderRadius: 10, alignItems: "center" },
+  navPrimaryText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
+  navDisabled: { opacity: 0.6 },
+
+  hintBox: {
+    position: "absolute",
+    bottom: 18,
+    left: 24,
+    right: 24,
+    backgroundColor: "#222",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#eee',
+    alignItems: "center",
   },
-  label: {fontSize: 14, fontWeight: '600'},
-  transcript: {
-    marginTop: 8,
-    fontSize: 16,
-    minHeight: 36,
-    color: '#000', // 🖤 black text
-  },
-  error: {marginTop: 8, color: 'red'},
-  hint: {
-    marginTop: 18,
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'center',
-  },
+  hintText: { color: "#FFF", fontSize: 14 },
 });
+
+export default AddExpenseScreen;
