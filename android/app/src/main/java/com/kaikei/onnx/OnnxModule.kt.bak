@@ -1,0 +1,669 @@
+package com.kaikei.onnx
+
+// ... (all imports are the same as your file)
+import android.content.Context
+import android.content.res.AssetManager
+import android.util.Log
+import com.facebook.react.bridge.*
+import ai.onnxruntime.*
+// ❌ REMOVED: import com.jlibrosa.audio.JLibrosa
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.nio.FloatBuffer
+import java.nio.LongBuffer
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.util.*
+import kotlin.concurrent.thread
+
+import com.antonkarpenko.ffmpegkit.FFmpegKit
+import com.antonkarpenko.ffmpegkit.ReturnCode
+
+// ✅ --- FIX: REVERT TO THE CORRECT FFT CLASS ---
+import be.tarsos.dsp.util.fft.FFT // This is the correct class
+import be.tarsos.dsp.util.fft.HannWindow // ✅ User changed from HanningWindow
+// ❌ REMOVED: import be.tarsos.dsp.beatroot.FFT 
+
+// ✅ --- ADD IMPORTS FOR WAV READER ---
+import java.io.DataInputStream
+import java.io.FileInputStream
+import java.io.BufferedInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+// ✅ --- FIX: ADD ALL MATH IMPORTS ---
+import kotlin.math.log
+import kotlin.math.log10
+import kotlin.math.pow
+import kotlin.math.sqrt // ✅ Re-added for magnitude calculation
+
+
+class OnnxModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+    // ... (all properties are the same)
+    private val ctx = reactContext
+    private var env: OrtEnvironment? = null
+    private var session: OrtSession? = null
+    private val TAG = "OnnxModule"
+
+    // ... (companion object is the same)
+    companion object {
+        const val SAMPLE_RATE: Int = 16000
+        const val N_FFT: Int = 400
+        const val HOP_LENGTH: Int = 160
+        const val N_MELS: Int = 80
+        const val N_FRAMES: Int = 3000 // 30 seconds * 100 frames/sec
+        const val TOKEN_SOT: Long = 50258
+        const val TOKEN_SW: Long = 50327
+        const val TOKEN_EN: Long = 50259
+        const val TOKEN_TRANSCRIBE: Long = 50359
+        const val TOKEN_NOTIMESTAMPS: Long = 50363
+    }
+
+
+    // ... (getName, copyAssetToFile, loadModel are all correct from your file)
+    override fun getName(): String = "OnnxModule"
+
+    // copyAssetToFile (Unchanged)
+    private fun copyAssetToFile(assetPath: String, destFile: File) {
+        Log.d(TAG, "Copying asset: $assetPath to $destFile")
+        val assetManager: AssetManager = ctx.assets
+        assetManager.open(assetPath).use { input ->
+            FileOutputStream(destFile).use { out ->
+                input.copyTo(out)
+            }
+        }
+        Log.d(TAG, "Asset copy complete.")
+    }
+
+    // loadModel (Unchanged)
+    @ReactMethod
+    fun loadModel(promise: Promise) {
+        thread {
+            try {
+                Log.d(TAG, "loadModel: Loading ONNX environment...")
+                if (env == null) env = OrtEnvironment.getEnvironment()
+                
+                val modelFilename = "whisper-base-sw-quantized.onnx"
+                val outFile = File(ctx.filesDir, modelFilename)
+                
+                if (!outFile.exists()) {
+                    Log.d(TAG, "loadModel: Model file not found, copying from assets...")
+                    copyAssetToFile("models/$modelFilename", outFile)
+                } else {
+                    Log.d(TAG, "loadModel: Model file already exists.")
+                }
+
+                val opts = OrtSession.SessionOptions()
+                opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+                
+                session?.close()
+                Log.d(TAG, "loadModel: Creating new ONNX session...")
+                session = env!!.createSession(outFile.absolutePath, opts)
+                Log.i(TAG, "loadModel: Model loaded successfully.")
+                promise.resolve("model_loaded")
+            } catch (e: Exception) {
+                Log.e(TAG, "loadModel error", e)
+                promise.reject("LOAD_ERROR", e.message)
+            }
+        }
+    }
+
+    // ✅ --- START OF ENDIANNESS FIX ---
+
+    // ❌ --- REMOVE ALL OLD, BUGGY HELPER FUNCTIONS ---
+    // private fun Int.toLittleEndian(): Int ...
+    // private fun Short.toLittleEndian(): Short ...
+    // private fun Int.toLittleEndianString(): String ...
+
+    // ✅ --- ADD NEW, CORRECT HELPER FUNCTIONS ---
+    /**
+     * Reads 4 bytes and assembles them into a Little-Endian Int.
+     */
+    @Throws(Exception::class)
+    private fun readIntLe(dis: DataInputStream): Int {
+        val bytes = ByteArray(4)
+        dis.readFully(bytes)
+        return (bytes[0].toInt() and 0xFF) or
+               ((bytes[1].toInt() and 0xFF) shl 8) or
+               ((bytes[2].toInt() and 0xFF) shl 16) or
+               ((bytes[3].toInt() and 0xFF) shl 24)
+    }
+
+    /**
+     * Reads 2 bytes and assembles them into a Little-Endian Short.
+     */
+    @Throws(Exception::class)
+    private fun readShortLe(dis: DataInputStream): Short {
+        val bytes = ByteArray(2)
+        dis.readFully(bytes)
+        val result = (bytes[0].toInt() and 0xFF) or
+                     ((bytes[1].toInt() and 0xFF) shl 8)
+        return result.toShort()
+    }
+
+    /**
+     * Reads N bytes and converts them to an ASCII String.
+     */
+    @Throws(Exception::class)
+    private fun readString(dis: DataInputStream, length: Int): String {
+        val bytes = ByteArray(length)
+        dis.readFully(bytes)
+        return String(bytes, Charsets.US_ASCII)
+    }
+
+
+    /**
+     * Reads a 16-bit PCM WAV file and returns normalized FloatArray [-1.0, 1.0]
+     */
+    @Throws(Exception::class)
+    private fun readWavFile(wavPath: String): FloatArray {
+        Log.d(TAG, "readWavFile: Opening $wavPath")
+        val file = File(wavPath)
+        val dis = DataInputStream(BufferedInputStream(FileInputStream(file)))
+
+        // Read and validate WAV header
+        // ✅ --- FIX: Use new helper functions ---
+        val chunkId = readString(dis, 4)
+        Log.d(TAG, "readWavFile: ChunkID: $chunkId")
+        if (chunkId != "RIFF") throw Exception("Invalid WAV file: Missing RIFF (found $chunkId)")
+        
+        val chunkSize = readIntLe(dis)
+        Log.d(TAG, "readWavFile: ChunkSize: $chunkSize")
+        
+        val format = readString(dis, 4)
+        Log.d(TAG, "readWavFile: Format: $format")
+        if (format != "WAVE") throw Exception("Invalid WAV file: Missing WAVE")
+        
+        val subChunk1Id = readString(dis, 4)
+        Log.d(TAG, "readWavFile: SubChunk1ID: $subChunk1Id")
+        if (subChunk1Id != "fmt ") throw Exception("Invalid WAV file: Missing fmt")
+        
+        val subChunk1Size = readIntLe(dis)
+        Log.d(TAG, "readWavFile: SubChunk1Size: $subChunk1Size")
+        // We only care about bytes 16-36 if subChunk1Size > 16
+
+        val audioFormat = readShortLe(dis)
+        Log.d(TAG, "readWavFile: AudioFormat: $audioFormat (1=PCM)")
+        if (audioFormat.toInt() != 1) throw Exception("Not a PCM file")
+        
+        val numChannels = readShortLe(dis)
+        Log.d(TAG, "readWavFile: NumChannels: $numChannels")
+        if (numChannels.toInt() != 1) throw Exception("File is not mono")
+        
+        val sampleRate = readIntLe(dis)
+        Log.d(TAG, "readWavFile: SampleRate: $sampleRate")
+        if (sampleRate != SAMPLE_RATE) Log.w(TAG, "WAV sample rate ($sampleRate) doesn't match expected ($SAMPLE_RATE)")
+
+        val byteRate = readIntLe(dis)
+        Log.d(TAG, "readWavFile: ByteRate: $byteRate")
+        
+        val blockAlign = readShortLe(dis)
+        Log.d(TAG, "readWavFile: BlockAlign: $blockAlign")
+        
+        val bitsPerSample = readShortLe(dis)
+        Log.d(TAG, "readWavFile: BitsPerSample: $bitsPerSample")
+        if (bitsPerSample.toInt() != 16) throw Exception("File is not 16-bit PCM")
+
+        // Skip any extra header data
+        val expectedHeaderSize = 16
+        if (subChunk1Size > expectedHeaderSize) {
+            val skipBytes = subChunk1Size - expectedHeaderSize
+            Log.w(TAG, "readWavFile: Skipping $skipBytes extra bytes in 'fmt' chunk")
+            dis.skipBytes(skipBytes)
+        }
+
+        // Find data chunk
+        var dataChunkId = readString(dis, 4)
+        while(dataChunkId != "data") {
+            Log.w(TAG, "readWavFile: Skipping unknown chunk: $dataChunkId")
+            val chunkSize = readIntLe(dis)
+            dis.skipBytes(chunkSize)
+            dataChunkId = readString(dis, 4)
+        }
+        Log.d(TAG, "readWavFile: Found data chunk.")
+        
+        val dataSize = readIntLe(dis)
+        Log.d(TAG, "readWavFile: Data size: $dataSize bytes")
+
+        val bytes = ByteArray(dataSize)
+        Log.d(TAG, "readWavFile: Reading $dataSize bytes of audio data...")
+        dis.readFully(bytes)
+
+        dis.close()
+        Log.d(TAG, "readWavFile: Converting bytes to float array...")
+
+        val samples = FloatArray(bytes.size / 2)
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+
+        for (i in samples.indices) {
+            val pcm = buffer.getShort()
+            samples[i] = pcm / 32768.0f // Normalize to [-1.0, 1.0]
+        }
+        Log.d(TAG, "readWavFile: Loaded ${samples.size} samples.")
+        return samples
+    }
+    
+    // ✅ --- END OF ENDIANNESS FIX ---
+
+    
+    // ✅ --- NEW: FREQUENCY/MEL CONVERSION HELPERS (from MFCC.java) ---
+    private fun freqToMel(freq: Float): Float {
+        return (2595.0 * log10(1.0 + freq / 700.0)).toFloat()
+    }
+
+    private fun inverseMel(mel: Float): Float {
+        // ✅ --- FIX: Use Kotlin's extension function syntax for pow ---
+        return (700.0 * (10.0.pow(mel / 2595.0) - 1.0)).toFloat()
+    }
+
+    // ✅ --- NEW: MEL FILTERBANK CALCULATOR (ported from MFCC.java) ---
+    /**
+     * Calculates the Mel filterbank weights.
+     * Returns a 2D array: [amountOfFilters][fftSize/2 + 1]
+     */
+    private fun calculateMelFilterbank(
+        amountOfFilters: Int,
+        fftSize: Int,
+        sampleRate: Float,
+        lowerFilterFreq: Float = 0f,
+        upperFilterFreq: Float = sampleRate / 2.0f
+    ): Array<FloatArray> {
+        
+        Log.d(TAG, "calculateMelFilterbank: Building $amountOfFilters filters for $fftSize FFT, $sampleRate Hz")
+        // fftSize/2 + 1 bins, matching standard FFT output (DC to Nyquist)
+        val fftBinCount = fftSize / 2 + 1
+        
+        // 1. Calculate center frequencies in Mel scale
+        val minMel = freqToMel(lowerFilterFreq)
+        val maxMel = freqToMel(upperFilterFreq)
+        val melStep = (maxMel - minMel) / (amountOfFilters + 1)
+
+        // We need N+2 points to define N triangular filters
+        val centerFrequenciesMel = FloatArray(amountOfFilters + 2) { i ->
+            minMel + i * melStep
+        }
+        // Convert Mel points back to Hz
+        val centerFrequenciesHz = centerFrequenciesMel.map { m -> inverseMel(m) }
+        // Convert Hz points to FFT bin indices
+        val centerFrequenciesBins = centerFrequenciesHz.map { f ->
+            // Bin index = (FFT Size * Frequency) / Sample Rate
+            // Ensure index stays within bounds [0, fftBinCount)
+            (fftSize * f / sampleRate).coerceIn(0f, fftBinCount - 1f).toInt()
+        }
+
+        // 2. Build the filterbank (triangular filters)
+        val filterbank = Array(amountOfFilters) { FloatArray(fftBinCount) }
+
+        for (i in 0 until amountOfFilters) {
+            val startBin = centerFrequenciesBins[i]
+            val centerBin = centerFrequenciesBins[i + 1]
+            val endBin = centerFrequenciesBins[i + 2]
+
+            // Rising slope: from startBin to centerBin
+            for (j in startBin until centerBin) {
+                if (j < fftBinCount) {
+                    // Normalize weight based on distance between start and center
+                    filterbank[i][j] = (j - startBin).toFloat() / (centerBin - startBin)
+                }
+            }
+            // Falling slope: from centerBin to endBin
+            for (j in centerBin until endBin) {
+                if (j < fftBinCount) {
+                    // Normalize weight based on distance between center and end
+                     filterbank[i][j] = 1.0f - (j - centerBin).toFloat() / (endBin - centerBin)
+                }
+            }
+        }
+        Log.d(TAG, "calculateMelFilterbank: Filterbank created. Shape: [${filterbank.size}][${filterbank.getOrNull(0)?.size ?: 0}]")
+        return filterbank
+    }
+
+    // ✅ --- NEW: MEL FILTER APPLICATION (ported from MFCC.java) ---
+    /**
+     * Applies the Mel filterbank to a magnitude spectrum.
+     */
+    private fun applyMelFilter(
+        magnitudeSpectrum: FloatArray, // Should have size fftSize/2 + 1
+        filterbank: Array<FloatArray> // Should have size [nMels][fftSize/2 + 1]
+    ): FloatArray {
+        val amountOfFilters = filterbank.size
+        val melBins = FloatArray(amountOfFilters)
+        val fftBinCount = magnitudeSpectrum.size
+        
+        for (k in 0 until amountOfFilters) {
+            var sum = 0.0f
+            // Ensure filterbank row is not shorter than spectrum
+            if (filterbank[k].size < fftBinCount) {
+                Log.e(TAG, "applyMelFilter: Filterbank[$k] size ${filterbank[k].size} < spectrum size $fftBinCount")
+                continue // Or throw error
+            }
+            // Apply dot product: sum(spectrum[i] * filterbank[k][i])
+            for (i in 0 until fftBinCount) {
+                sum += magnitudeSpectrum[i] * filterbank[k][i]
+            }
+            melBins[k] = sum
+        }
+        return melBins
+    }
+
+    // ✅ --- NEW: MAGNITUDE SPECTRUM (STANDARD IMPLEMENTATION) ---
+    /**
+     * Calculates the magnitude spectrum from TarsosDSP's packed FFT output format.
+     * Output size: fftSize/2 + 1 (includes DC and Nyquist bins)
+     */
+    private fun calculateMagnitudeSpectrumPacked(fftFrame: FloatArray, fftSize: Int): FloatArray {
+        // TarsosDSP util.fft.FFT packed format:
+        // [real[0], real[N/2], real[1], imag[1], ... real[N/2-1], imag[N/2-1]]
+        // Total size: N (fftSize)
+        val magSpectrum = FloatArray(fftSize / 2 + 1)
+        
+        // DC component (real[0])
+        magSpectrum[0] = kotlin.math.abs(fftFrame[0])
+        
+        // Nyquist component (real[N/2]) - present only for even N
+        if (fftSize % 2 == 0) {
+            magSpectrum[fftSize / 2] = kotlin.math.abs(fftFrame[1])
+        }
+        
+        // Other bins (real[k] + j*imag[k])
+        for (k in 1 until fftSize / 2) {
+            val realIdx = 2 * k
+            val imagIdx = 2 * k + 1
+            if (realIdx < fftFrame.size && imagIdx < fftFrame.size) {
+                 val real = fftFrame[realIdx]
+                 val imag = fftFrame[imagIdx]
+                 magSpectrum[k] = sqrt(real * real + imag * imag)
+            } else {
+                 Log.w(TAG, "calculateMagnitudeSpectrumPacked: Index out of bounds for k=$k, fftSize=$fftSize")
+                 magSpectrum[k] = 0f // Or handle error
+            }
+        }
+        return magSpectrum
+    }
+
+
+    // ✅ --- REWRITTEN SPECTROGRAM GENERATOR (using FFT + manual filterbank) ---
+    private fun generateLinearMelSpectrogram(
+        audioSamples: FloatArray,
+        sampleRate: Int,
+        nFft: Int,
+        hopLength: Int,
+        nMels: Int
+    ): Array<FloatArray> {
+
+        // 1. Calculate the Mel Filterbank (expects N/2 + 1 bins)
+        val filterbank = calculateMelFilterbank(nMels, nFft, sampleRate.toFloat())
+
+        Log.d(TAG, "generateLinearMelSpectrogram: Creating FFT (nFft=$nFft)...")
+        // 2. Create FFT object using user's HannWindow
+        val fft = FFT(nFft, HannWindow())
+
+        // 3. Calculate number of frames
+        val frameCount = (audioSamples.size - nFft) / hopLength + 1
+        if (frameCount <= 0) {
+            Log.w(TAG, "generateLinearMelSpectrogram: Audio too short to generate any frames.")
+            return Array(nMels) { FloatArray(0) }
+        }
+        Log.d(TAG, "generateLinearMelSpectrogram: Calculated frame count: $frameCount")
+
+        val melSpectrogram = Array(nMels) { FloatArray(frameCount) }
+        val frame = FloatArray(nFft)
+
+        // 4. Iterate over audio frames
+        for (i in 0 until frameCount) {
+            val frameStart = i * hopLength
+            System.arraycopy(audioSamples, frameStart, frame, 0, nFft)
+
+            // 5. Compute FFT (in-place) using user's forwardTransform
+            fft.forwardTransform(frame) // Modifies 'frame' in-place
+            
+            // 6. Compute Magnitude Spectrum (from packed format, size N/2 + 1)
+            val magnitudeSpectrum = calculateMagnitudeSpectrumPacked(frame, nFft)
+            
+            // 7. Apply Mel Filterbank (expects N/2 + 1 bins)
+            val melBins = applyMelFilter(magnitudeSpectrum, filterbank)
+
+            // 8. Store linear mel value
+            for (j in 0 until nMels) {
+                melSpectrogram[j][i] = melBins[j]
+            }
+        }
+        Log.d(TAG, "generateLinearMelSpectrogram: Spectrogram generated. Shape: [$nMels][$frameCount]")
+        return melSpectrogram
+    }
+
+
+    // padOrTrimSpectrogram (Unchanged)
+    private fun padOrTrimSpectrogram(spec: Array<FloatArray>, nFrames: Int): FloatArray {
+        val nRows = spec.size
+        // Handle case where spec might be empty from a very short audio
+        if (nRows == 0 || spec[0].isEmpty()) {
+            Log.w(TAG, "padOrTrimSpectrogram: Spectrogram was empty, returning silent padding.")
+            return FloatArray(N_MELS * nFrames) { -10.0f }
+        }
+
+        val nCols = spec[0].size
+        Log.d(TAG, "padOrTrimSpectrogram: Padding/trimming $nRows x $nCols spec to $nRows x $nFrames")
+        
+        val flatOutput = FloatArray(nRows * nFrames) { -10.0f } // log-floor
+        val copyCols = nCols.coerceAtMost(nFrames)
+
+        for (i in 0 until nRows) {
+            for (j in 0 until copyCols) {
+                flatOutput[i * nFrames + j] = spec[i][j]
+            }
+        }
+        Log.d(TAG, "padOrTrimSpectrogram: Padding complete.")
+        return flatOutput
+    }
+
+    private fun softmax(logits: FloatArray): FloatArray {
+	    val maxLogit = logits.maxOrNull() ?: 0f
+	    val exps = logits.map {kotlin.math.exp((it - maxLogit).toDouble()).toFloat() }
+	    val sumExp = exps.sum()
+	    return exps.map {it / sumExp }.toFloatArray()
+    }
+
+    private fun loadVocab(context: Context): Map<Int, String> {
+	    val jsonStr = context.assets.open("models/vocab.json").bufferedReader().use { it.readText() }
+	    val jsonObj = org.json.JSONObject(jsonStr)
+	    val vocab = mutableMapOf<Int, String>()
+	    val keys = jsonObj.keys()
+	    while (keys.hasNext()) {
+		    val key = keys.next()
+		    vocab[jsonObj.getInt(key)] = key
+	    }
+	    return vocab
+    }
+
+    private fun decodeTokens(tokenIds: List<Int>, vocab: Map<Int, String>): String {
+	    val tokens = tokenIds.mapNotNull { vocab[it] }
+	    return tokens.joinToString(separator = "")
+	    	.replace("_", "") // Whisper uses _ for spaces
+		.trim()
+    }
+
+    // runModel (Unchanged from last version, but will now call new helpers)
+    @ReactMethod
+    fun runModel(originalAudioPath: String, promise: Promise) {
+        thread {
+            var outputWavFile: File? = null //declare here for cleanup
+            try {
+                Log.d(TAG, "runModel: Starting inference for: $originalAudioPath")
+                val s = session ?: throw RuntimeException("Model not loaded")
+                val ortEnv = env ?: throw RuntimeException("Environment not loaded")
+
+                val originalFile = File(originalAudioPath)
+                if (!originalFile.exists()) {
+                    throw java.io.FileNotFoundException("Original audio file not found: $originalAudioPath")
+                }
+                Log.d(TAG, "runModel: Input file size: ${originalFile.length()} bytes")
+
+                // ======== 1. CONVERT AUDIO TO WAV (Unchanged) ========
+                outputWavFile = File(ctx.cacheDir, "converted_${UUID.randomUUID()}.wav")
+                val outputWavPath = outputWavFile.absolutePath
+                Log.d(TAG, "runModel: Starting FFmpeg conversion -> $outputWavPath")
+                
+                val command = "-y -i \"$originalAudioPath\" -acodec pcm_s16le -ac 1 -ar $SAMPLE_RATE -f wav \"$outputWavPath\""
+                Log.d(TAG, "runModel: FFmpeg command: $command")
+
+                val ffmpegSession = FFmpegKit.execute(command)
+                val returnCode = ffmpegSession.returnCode
+                val logs = ffmpegSession.allLogsAsString
+                Log.d(TAG, "runModel: FFmpeg logs:\n$logs")
+
+                if (!ReturnCode.isSuccess(returnCode)) {
+                    Log.e(TAG, "runModel: FFmpeg conversion failed with code: ${returnCode.value}")
+                    outputWavFile.delete()
+                    throw RuntimeException("FFmpeg conversion failed. Code: ${returnCode.value}\nLogs: $logs")
+                }
+                if (!outputWavFile.exists() || outputWavFile.length() < 44) { // 44 bytes = empty header
+                    Log.e(TAG, "runModel: Output WAV file missing or too small: ${outputWavFile.length()} bytes")
+                    throw RuntimeException("FFmpeg conversion produced invalid output file")
+                }
+                Log.d(TAG, "runModel: FFmpeg conversion successful. Output file size: ${outputWavFile.length()} bytes")
+
+                // ======== 2. Load Audio (REPLACED) ========
+                Log.d(TAG, "runModel: Loading converted WAV with custom reader...")
+                var audioSamples = readWavFile(outputWavPath)
+                Log.d(TAG, "runModel: Loaded ${audioSamples.size} samples")
+                
+                // --- Robustness Check ---
+                if (audioSamples.isEmpty()) {
+                    throw RuntimeException("Failed to load audio samples from converted WAV")
+                }
+                if (audioSamples.size < N_FFT) {
+                    Log.w(TAG, "runModel: Audio too short (${audioSamples.size} samples), padding to $N_FFT")
+                    audioSamples = audioSamples.copyOf(N_FFT)
+                }
+
+                // ======== 3. Compute Mel Spec (REPLACED) ========
+                Log.d(TAG, "runModel: Generating Mel Spectrogram with TarsosDSP/MFCC logic...")
+                // ✅ --- Call the main function, not _Fixed ---
+                val melSpectrogram = generateLinearMelSpectrogram(
+                    audioSamples,
+                    SAMPLE_RATE,
+                    N_FFT,
+                    HOP_LENGTH,
+                    N_MELS
+                )
+
+                // --- Log Scaling (Same as your original code) ---
+                Log.d(TAG, "runModel: Applying log scale to spectrogram...")
+                val logMelSpec = Array(N_MELS) { i ->
+                    FloatArray(melSpectrogram[i].size) { j ->
+                        // ✅ --- FIX: Convert to Double for log function, then back to Float ---
+                        log(melSpectrogram[i][j].coerceAtLeast(1e-10f).toDouble(), 10.0).toFloat()
+                    }
+                }
+                
+                Log.d(TAG, "runModel: Padding/trimming spectrogram...")
+                val paddedSpec = padOrTrimSpectrogram(logMelSpec, N_FRAMES)
+
+                // ======== 4. Create Input Tensors (Unchanged) ========
+                Log.d(TAG, "runModel: Creating input tensors...")
+                val inputFeaturesShape = longArrayOf(1, N_MELS.toLong(), N_FRAMES.toLong())
+                val inputFeaturesBuffer = FloatBuffer.wrap(paddedSpec)
+                val inputFeaturesTensor = OnnxTensor.createTensor(ortEnv, inputFeaturesBuffer, inputFeaturesShape)
+                
+                val decoderIds = longArrayOf(TOKEN_SOT, TOKEN_SW, TOKEN_TRANSCRIBE, TOKEN_NOTIMESTAMPS)
+                val decoderIdsShape = longArrayOf(1, decoderIds.size.toLong())
+                val decoderIdsBuffer = LongBuffer.wrap(decoderIds)
+                val decoderIdsTensor = OnnxTensor.createTensor(ortEnv, decoderIdsBuffer, decoderIdsShape)
+                Log.d(TAG, "runModel: Tensors created.")
+
+                // ======== 5. Run Model (Unchanged) ========
+                val inputs = mapOf(
+                    "input_features" to inputFeaturesTensor,
+                    "decoder_input_ids" to decoderIdsTensor
+                )
+                
+                Log.i(TAG, "runModel: RUNNING ONNX INFERENCE...")
+                val results = s.run(inputs)
+                Log.i(TAG, "runModel: Inference complete.")
+
+                // ======== 6. Process output (Unchanged) ========
+                // val outputTensor = results[0].value as LongArray
+                //val tokenIds = outputTensor.joinToString(", ")
+                Log.i(TAG, "runModel: Output Results $results")
+                // Log.i(TAG, "runModel: Output Token IDs: $tokenIds")
+		//
+		for ((name, value) in results) {
+			Log.i(TAG, "Output name: $name, type: ${value.type}")
+
+			if (value is OnnxTensor) {
+				val tensorValue = value.value
+				when (tensorValue) {
+					is FloatArray -> {
+						Log.i(TAG, "Tensor content <FloatArray>: ${tensorValue.joinToString(", ")}")
+					}
+					is Array<*> -> {
+						Log.i(TAG, "Tensor content <Array *>: ${tensorValue.contentDeepToString()}")
+					}
+					else -> {
+						Log.i(TAG, "Tensor (unrecognized type): ${tensorValue::class.java.simpleName}")
+					}
+				}
+			} else {
+				Log.i(TAG, "Non-Tensor output: ${value.javaClass.simpleName}")
+			}
+		}
+
+		val logits = (results[0].value as Array<Array<FloatArray>>)[0]
+		Log.d(TAG, "runModel: logits: $logits")
+		val probabilities = logits.map { softmax(it) }
+		val tokenIds = probabilities.map { probs ->
+			probs.indices.maxByOrNull { probs[it] } ?: 0
+		}
+		
+		Log.i(TAG, "tokenIds size: ${tokenIds.size}")
+		tokenIds.forEachIndexed {index, id -> 
+			Log.i(TAG, "Token[$index] = $id")
+		}
+		
+		val vocab = loadVocab(ctx)
+		Log.i(TAG, "Vocabulary size: ${vocab.size}")
+		vocab.entries.take(100).forEach { (token, id) ->
+			Log.i(TAG, "Token: '$token' -> ID: $id")
+		}
+		val decodedText = decodeTokens(tokenIds, vocab)
+		Log.i(TAG, "Decoded text: $decodedText")
+
+
+
+
+                // Clean up
+                results.close()
+                inputFeaturesTensor.close()
+                decoderIdsTensor.close()
+                Log.d(TAG, "runModel: Tensors closed.")
+
+                // Resolve with the token IDs
+                // promise.resolve(tokenIds)
+		promise.resolve("DONE")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "runModel: CRITICAL ERROR", e)
+                e.printStackTrace()
+                promise.reject("RUN_ERROR", e.message, e)
+            } finally {
+                // Always try to delete the temp file
+                try {
+                    if (outputWavFile != null && outputWavFile.exists()) {
+                        outputWavFile.delete()
+                        Log.d(TAG, "runModel: Cleaned up temp WAV file.")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "runModel: Error cleaning up temp file", e)
+                }
+            }
+        }
+    }
+
+    // ❌ --- REMOVED THE _Fixed FUNCTIONS ---
+    // private fun generateLinearMelSpectrogram_Fixed(...)
+    // private fun calculateMelFilterbank_Fixed(...)
+}
+
+

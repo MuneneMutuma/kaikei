@@ -1,0 +1,111 @@
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Platform,
+  PermissionsAndroid,
+  Alert,
+} from "react-native";
+import AudioRecorderPlayer, {
+  AudioEncoderAndroidType,
+  AudioSourceAndroidType,
+  AVEncodingOption,
+  OutputFormatAndroidType,
+} from "react-native-nitro-sound";
+
+
+import { NativeModules } from "react-native";
+import RNFS from "react-native-fs";
+
+const { OnnxModule } = NativeModules;
+
+const audioSet = {
+  AudioSourceAndroid: AudioSourceAndroidType.MIC,
+  AudioEncoderAndroid: AudioEncoderAndroidType.PCM_16BIT,
+  AudioEncodingBitRateAndroid: 128000,
+  AudioSamplingRateAndroid: 16000, // ✅ CRITICAL: 16kHz
+  AudioChannelsAndroid: 1,         // ✅ CRITICAL: Mono
+};
+
+
+const VoiceInput = () => {
+  const [recording, setRecording] = useState(null);
+  const [path, setPath] = useState<string | null>(null);
+  const [whisperText, setWhisperText] = useState<string | null>(null);
+
+  const audioRecorderPlayer = AudioRecorderPlayer;
+
+  // ✅ load model once when component mounts
+  useEffect(() => {
+    OnnxModule.loadModel()
+      .then((msg: any) => console.log("ONNX loaded:", msg))
+      .catch((e: any) => console.error("loadModel failed", e));
+  }, []);
+
+  async function requestAndroidPermissions() {
+    try {
+      const granted = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+      ]);
+      return granted;
+    } catch (err) {
+      console.warn(err);
+      return null;
+    }
+  }
+
+  async function start() {
+    if (Platform.OS === "android") await requestAndroidPermissions();
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+    const dir = RNFS.DownloadDirectoryPath;
+    const filePath = `${dir}/whisper_record_${timestamp}.mp4`;
+
+    console.log("Recording to:", filePath);
+
+    const uri = await audioRecorderPlayer.startRecorder(filePath, audioSet);
+    setPath(uri);
+    setRecording(true);
+  }
+
+  async function stopAndRun() {
+    console.log("Stopping Recording ...")
+    try{
+    const uri = await audioRecorderPlayer.stopRecorder();
+    audioRecorderPlayer.removeRecordBackListener();
+    setRecording(false);
+    setPath(uri);
+    console.log('Original recording at:', uri);
+    if (!uri) throw new Error("Failed to get recording URI.");
+
+    const originalPath = uri.replace('file://', '');
+    console.log('Calling OnnxModule.runModel with:', originalPath);
+    const out = await OnnxModule.runModel(originalPath);
+
+    console.log("Whisper output:", out);
+    setWhisperText(JSON.stringify(out));
+
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Inference error", String(e));
+      setRecording(null);
+    }
+  }
+  return (
+    <View>
+      <TouchableOpacity onPress={() => (recording ? stopAndRun() : start())}>
+        <Text>{recording ? "Stop & transcribe" : "Record"}</Text>
+      </TouchableOpacity>
+
+      {path && <Text>Saved at: {path}</Text>}
+      {whisperText && <Text>Whisper output: {whisperText}</Text>}
+    </View>
+  );
+};
+
+export default VoiceInput;
+
