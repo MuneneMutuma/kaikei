@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -6,240 +6,341 @@ import {
   Platform,
   PermissionsAndroid,
   Alert,
+  StyleSheet,
 } from "react-native";
 import AudioRecorderPlayer, {
   AudioEncoderAndroidType,
   AudioSourceAndroidType,
   OutputFormatAndroidType,
 } from "react-native-nitro-sound";
-import { NativeModules } from "react-native";
 import RNFS from "react-native-fs";
-
-const { OnnxModule } = NativeModules;
+import { initWhisper, WhisperContext, addNativeLogListener } from "whisper.rn";
+import AudioRecord from 'react-native-audio-record';
 
 // ✅ Use AAC in MPEG4 container - most reliable for Android
+// whisper.rn typically handles various formats, but 16kHz WAV is ideal.
+// For now, we stick to what worked for recording, but we might need to transcode or configure
+// whisper.rn to accept this.
+// NOTE: whisper.rn supports decoding via FFmpegKit internally if available, or system APIs.
 const audioSet = {
   AudioSourceAndroid: AudioSourceAndroidType.MIC,
-  AudioEncoderAndroid: AudioEncoderAndroidType.AAC,  // ✅ Changed from PCM_16BIT
+  AudioEncoderAndroid: AudioEncoderAndroidType.AAC,
   OutputFormatAndroid: OutputFormatAndroidType.MPEG_4,
   AudioEncodingBitRateAndroid: 128000,
-  AudioSamplingRateAndroid: 16000,  // ✅ 16kHz
-  AudioChannelsAndroid: 1,          // ✅ Mono
+  AudioSamplingRateAndroid: 16000,
+  AudioChannelsAndroid: 1,
 };
 
 const VoiceInput = () => {
   const [recording, setRecording] = useState<boolean>(false);
   const [path, setPath] = useState<string | null>(null);
-  const [whisperText, setWhisperText] = useState<string | null>(null);
+  const [transcribedText, setTranscribedText] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
-  
-  const audioRecorderPlayer = AudioRecorderPlayer;
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [modelReady, setModelReady] = useState<boolean>(false);
+
+  const whisperContext = useRef<WhisperContext | null>(null);
+  // const audioRecorderPlayer = useRef(new AudioRecorderPlayer()).current; // Removed: It's a singleton, use import directly.
 
   useEffect(() => {
-    // 1. Define an async function right here
-    const loadModelAsync = async () => {
+    const initializeModel = async () => {
       try {
-        const msg = await OnnxModule.loadModel();
-        console.log("✅ ONNX loaded:", msg);
-      } catch (e) {
-        console.error("❌ loadModel failed", e);
+        console.log("📥 Initializing Whisper model...");
+        // Initialize with a tiny model for quick testing.
+        // In a real app, you might download a specific model to FS and pass the path.
+        // For now, we'll try to use the 'tiny' model which whisper.rn can download/load.
+        const context = await initWhisper({
+          filePath: require('../../assets/ggml-tiny.en.bin'), // We need to ensure this asset exists or use a download URL
+        });
+
+        // Fallback if asset not bundled: Download it
+        // const context = await initWhisper({
+        //   filePath: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+        //   toFile: `${RNFS.DocumentDirectoryPath}/ggml-tiny.en.bin`,
+        // });
+
+        whisperContext.current = context;
+        setModelReady(true);
+        console.log("✅ Whisper model initialized!");
+      } catch (error) {
+        console.error("❌ Failed to init Whisper:", error);
+        // Alert.alert("Model Error", "Failed to load Whisper model. Check logs.");
       }
     };
 
-    // 2. Then, call it
-    loadModelAsync();
+    initializeModel();
+  }, []);
+
+  useEffect(() => {
+    console.log("🔍 Subscribing to Whisper native logs...");
+    const listener = addNativeLogListener((level, message) => {
+      console.log(`[WhisperNative] ${level}: ${message}`);
+    });
+    return () => {
+      console.log("🔍 Unsubscribing from Whisper native logs...");
+      listener.remove();
+    }
   }, []);
 
   async function requestAndroidPermissions() {
     try {
-      // ✅ For Android 13+ (API 33+), we don't need storage permissions
-      // Only RECORD_AUDIO is required
-      const androidVersion = Platform.Version;
-      
-      if (androidVersion >= 33) {
-        // Android 13+
+      if (Platform.Version >= 33) {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
         );
-        
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert("Permission Required", "Microphone permission is required to record audio");
-          return false;
-        }
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
       } else {
-        // Android 12 and below
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
           PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
           PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
         ]);
-        
-        const allGranted = Object.values(granted).every(
+        return Object.values(granted).every(
           status => status === PermissionsAndroid.RESULTS.GRANTED
         );
-        
-        if (!allGranted) {
-          Alert.alert("Permissions Required", "Please grant all permissions");
-          return false;
-        }
       }
-      
-      return true;
     } catch (err) {
       console.warn("Permission error:", err);
-      Alert.alert("Permission Error", String(err));
       return false;
     }
   }
 
   async function start() {
+    if (!modelReady) {
+      Alert.alert("Not Ready", "Whisper model is still loading...");
+      return;
+    }
+
     if (Platform.OS === "android") {
       const granted = await requestAndroidPermissions();
-      if (!granted) return;
+      if (!granted) {
+        Alert.alert("Permission Required", "Microphone permission is required");
+        return;
+      }
     }
-    
+
     try {
       const timestamp = Date.now();
-      
-      // ✅ CRITICAL: Use app's internal cache directory (no permissions needed)
-      // This avoids Android 13+ scoped storage issues
-      const filePath = `${RNFS.CachesDirectoryPath}/whisper_record_${timestamp}.m4a`;
-      
-      console.log("📝 Recording to:", filePath);
-      
-      const uri = await audioRecorderPlayer.startRecorder(filePath, audioSet);
-      setPath(uri);
+      // react-native-audio-record saves to external cache dir or similar automatically.
+      // We can specify 'wavFile' name.
+      const fileName = `whisper_record_${timestamp}.wav`;
+
+      console.log("📝 Initializing AudioRecord...");
+      const options = {
+        sampleRate: 16000,  // default 44100
+        channels: 1,        // 1 or 2, default 1
+        bitsPerSample: 16,  // 8 or 16, default 16
+        audioSource: 6,     // android only (VOICE_RECOGNITION)
+        wavFile: fileName   // default 'audio.wav'
+      };
+
+      AudioRecord.init(options);
+      AudioRecord.start();
+
+      // We don't get the path immediately on start with this lib, usually.
+      // But we can construct it or wait for stop.
+      // Let's set recording true.
       setRecording(true);
-      setWhisperText(null);
-      
-      console.log("🎙️ Recording started");
+      setTranscribedText(null);
+      setPath(null); // Clear previous path until stop
+
+      console.log("🎙️ Recording started (WAV 16kHz)");
     } catch (error) {
       console.error("❌ Failed to start recording:", error);
       Alert.alert("Recording Error", String(error));
     }
   }
 
-  async function stopAndRun() {
+  async function stopAndTranscribe() {
     console.log("⏹️ Stopping Recording...");
     setLoading(true);
-    
+
     try {
-      const uri = await audioRecorderPlayer.stopRecorder();
-      audioRecorderPlayer.removeRecordBackListener();
+      const audioFile = await AudioRecord.stop();
       setRecording(false);
-      
+
+      const uri = `file://${audioFile}`;
       console.log('✅ Recording stopped at:', uri);
-      
-      if (!uri) {
-        throw new Error("Failed to get recording URI");
-      }
+
+      if (!audioFile) throw new Error("Failed to get recording URI");
 
       setPath(uri);
-      
-      // Remove file:// prefix if present
-      const originalPath = uri.replace('file://', '');
-      
-      // Verify file exists
+      const originalPath = audioFile; // AudioRecord returns absolute path
+
+      // Check file stats
       const fileExists = await RNFS.exists(originalPath);
-      if (!fileExists) {
-        throw new Error(`Recording file not found: ${originalPath}`);
+      if (!fileExists) throw new Error("File does not exist at path: " + originalPath);
+
+      const stats = await RNFS.stat(originalPath);
+      console.log(`📂 File Stats: size=${stats.size}, path=${originalPath}`);
+
+      if (stats.size < 1000) {
+        console.warn("⚠️ File size is very small. Recording might be silent or failed.");
       }
-      
-      // Check file size
-      const fileInfo = await RNFS.stat(originalPath);
-      console.log(`📊 Recording file size: ${fileInfo.size} bytes`);
-      
-      if (fileInfo.size < 1000) {
-        throw new Error(`Recording too short (${fileInfo.size} bytes). Please record at least 1 second.`);
-      }
-      
+
       console.log('🚀 Starting transcription...');
-      
       const startTime = Date.now();
-      const tokenIds = await OnnxModule.runModel(originalPath);
+
+      if (!whisperContext.current) {
+        throw new Error("Whisper context not initialized");
+      }
+
+      // Transcribe
+      const { promise } = await whisperContext.current.transcribe(originalPath, {
+        language: 'en',
+        tokenTimestamps: true,
+      });
+
+      const result = await promise;
+
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-      
-      console.log(`✅ Transcription complete (${duration}s):`, tokenIds);
-      
-      setWhisperText(tokenIds);
-      
-      // Optional: Clean up recording file after processing
-      // await RNFS.unlink(originalPath);
-      
-      Alert.alert(
-        "✅ Transcription Complete",
-        `Processing time: ${duration}s\n\nToken IDs received. Implement tokenizer to decode text.`,
-        [{ text: "OK" }]
-      );
-      
+      console.log(`✅ Transcription complete (${duration}s). Result:`, JSON.stringify(result, null, 2));
+
+      setTranscribedText(result.result);
+
     } catch (error: any) {
       console.error("❌ Error:", error);
-      Alert.alert(
-        "Error",
-        error.message || String(error),
-        [{ text: "OK" }]
-      );
+      Alert.alert("Error", error.message || String(error));
     } finally {
       setLoading(false);
     }
   }
 
+  async function onStartPlay() {
+    console.log('▶️ Playing...');
+    try {
+      if (!path) return;
+      const msg = await AudioRecorderPlayer.startPlayer(path);
+      const volume = await AudioRecorderPlayer.setVolume(1.0);
+      console.log(`▶️ Playing started: ${msg}`);
+
+      setIsPlaying(true);
+      AudioRecorderPlayer.addPlayBackListener((e) => {
+        if (e.currentPosition === e.duration) {
+          console.log('⏹️ Playback finished');
+          AudioRecorderPlayer.stopPlayer();
+          AudioRecorderPlayer.removePlayBackListener();
+          setIsPlaying(false);
+        }
+        return;
+      });
+    } catch (error) {
+      console.error('❌ Failed to play:', error);
+      Alert.alert('Playback Error', String(error));
+    }
+  }
+
+  async function onStopPlay() {
+    console.log('⏹️ Stopping Playback...');
+    try {
+      AudioRecorderPlayer.stopPlayer();
+      AudioRecorderPlayer.removePlayBackListener();
+      setIsPlaying(false);
+    } catch (error) {
+      console.error('❌ Failed to stop play:', error);
+    }
+  }
+
   return (
-    <View style={{ padding: 20, flex: 1, justifyContent: "center" }}>
+    <View style={styles.container}>
       <TouchableOpacity
-        onPress={() => (recording ? stopAndRun() : start())}
-        disabled={loading}
-        style={{
-          backgroundColor: loading ? "#999" : recording ? "#ff4444" : "#4444ff",
-          padding: 20,
-          borderRadius: 15,
-          alignItems: "center",
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.3,
-          shadowRadius: 4,
-          elevation: 5,
-        }}
+        onPress={() => (recording ? stopAndTranscribe() : start())}
+        disabled={loading || isPlaying}
+        style={[
+          styles.button,
+          { backgroundColor: loading ? "#999" : recording ? "#ff4444" : "#4444ff" }
+        ]}
       >
-        <Text style={{ color: "white", fontSize: 20, fontWeight: "bold" }}>
+        <Text style={styles.buttonText}>
           {loading ? "⏳ Processing..." : recording ? "⏹️ Stop & Transcribe" : "🎙️ Start Recording"}
         </Text>
       </TouchableOpacity>
 
+      {path && !recording && !loading && (
+        <TouchableOpacity
+          onPress={() => (isPlaying ? onStopPlay() : onStartPlay())}
+          style={[styles.button, { marginTop: 20, backgroundColor: isPlaying ? "#FFA500" : "#008000" }]}
+        >
+          <Text style={styles.buttonText}>
+            {isPlaying ? "⏹️ Stop Playing" : "▶️ Play Recording"}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {recording && (
-        <View style={{ marginTop: 20, alignItems: "center" }}>
-          <Text style={{ fontSize: 16, color: "#ff4444", fontWeight: "bold" }}>
-            ● Recording...
-          </Text>
+        <View style={styles.statusContainer}>
+          <Text style={styles.recordingText}>● Recording...</Text>
         </View>
       )}
 
-      {path && !recording && (
-        <View style={{ marginTop: 20, padding: 15, backgroundColor: "#f0f0f0", borderRadius: 10 }}>
-          <Text style={{ fontSize: 12, color: "#666", fontWeight: "bold" }}>
-            📁 Saved:
-          </Text>
-          <Text style={{ fontSize: 10, color: "#888", marginTop: 5 }}>
-            {path}
-          </Text>
-        </View>
+      {modelReady ? (
+        <Text style={styles.modelStatus}>🟢 Model Ready (Tiny English)</Text>
+      ) : (
+        <Text style={styles.modelStatus}>🔴 Loading Model...</Text>
       )}
 
-      {whisperText && (
-        <View style={{ marginTop: 20, padding: 15, backgroundColor: "#e8f5e9", borderRadius: 10 }}>
-          <Text style={{ fontWeight: "bold", fontSize: 16, color: "#2e7d32" }}>
-            🎯 Whisper Output:
-          </Text>
-          <Text style={{ marginTop: 10, fontSize: 14, color: "#1b5e20" }}>
-            {whisperText}
-          </Text>
-          <Text style={{ marginTop: 10, fontSize: 12, color: "#666", fontStyle: "italic" }}>
-            Note: These are token IDs. You need to implement a tokenizer to decode them into text.
-          </Text>
+      {transcribedText && (
+        <View style={styles.resultContainer}>
+          <Text style={styles.resultTitle}>🎯 Transcription:</Text>
+          <Text style={styles.resultText}>{transcribedText}</Text>
         </View>
       )}
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 20,
+    flex: 1,
+    justifyContent: "center",
+  },
+  button: {
+    padding: 20,
+    borderRadius: 15,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  buttonText: {
+    color: "white",
+    fontSize: 20,
+    fontWeight: "bold",
+  },
+  statusContainer: {
+    marginTop: 20,
+    alignItems: "center",
+  },
+  recordingText: {
+    fontSize: 16,
+    color: "#ff4444",
+    fontWeight: "bold",
+  },
+  modelStatus: {
+    marginTop: 10,
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#666',
+  },
+  resultContainer: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: "#e8f5e9",
+    borderRadius: 10,
+  },
+  resultTitle: {
+    fontWeight: "bold",
+    fontSize: 16,
+    color: "#2e7d32",
+  },
+  resultText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: "#1b5e20",
+  },
+});
 
 export default VoiceInput;
