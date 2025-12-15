@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import SetupScreen from './src/screens/SetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
+import { Database } from './src/services/ledger/Database';
 
 export type RootStackParamList = {
   Setup: undefined;
@@ -18,6 +19,15 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const App = () => {
+  useEffect(() => {
+    try {
+      Database.init();
+      console.log('Database initialized successfully');
+    } catch (e) {
+      console.error('Failed to initialize database:', e);
+    }
+  }, []);
+
   const [userName, setUserName] = useState<string | null>(null);
   const [persona, setPersona] = useState<string | null>(null);
 
