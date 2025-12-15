@@ -15,12 +15,13 @@ import { initWhisper, WhisperContext } from "whisper.rn";
 import { Buffer } from "buffer";
 
 // Configure 16kHz WAV for Whisper
+// Configure 16kHz WAV for Whisper
 const options = {
     sampleRate: 16000,
     channels: 1,
     bitsPerSample: 16,
-    audioSource: 6, // VOICE_RECOGNITION
-    wavFile: 'test.wav'
+    audioSource: 1, // MIC (try 1 if 6 fails)
+    wavFile: 'voice_input.wav'
 };
 
 const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
@@ -46,7 +47,19 @@ const VoiceInput = () => {
     const setupWhisper = async () => {
         try {
             const exists = await RNFS.exists(MODEL_PATH);
-            if (!exists) {
+            let shouldDownload = !exists;
+
+            if (exists) {
+                const stats = await RNFS.stat(MODEL_PATH);
+                console.log(`Model file found. Size: ${stats.size} bytes`);
+                if (stats.size < 1000000) { // Less than 1MB means likely corrupt or LFS pointer
+                    console.log("Model file too small, deleting and redownloading...");
+                    await RNFS.unlink(MODEL_PATH);
+                    shouldDownload = true;
+                }
+            }
+
+            if (shouldDownload) {
                 console.log("Downloading Whisper model...");
                 const ret = RNFS.downloadFile({
                     fromUrl: MODEL_URL,
@@ -61,14 +74,14 @@ const VoiceInput = () => {
                 setDownloadProgress(null);
             }
 
-            console.log("Initializing Whisper context...");
+            console.log("Initializing Whisper context from:", MODEL_PATH);
             const context = await initWhisper({ filePath: MODEL_PATH });
             whisperContext.current = context;
             setIsModelReady(true);
-            console.log("Whisper initialized!");
+            console.log("Whisper initialized successfully!");
         } catch (e) {
             console.error("Failed to setup Whisper:", e);
-            Alert.alert("Setup Error", "Failed to load speech recognition model: " + e);
+            Alert.alert("Setup Error", "Failed to load AI model. Please restart the app or check internet. Error: " + e);
         }
     };
 
