@@ -98,4 +98,50 @@ export class ExpenseRepository {
     async deleteByTransactionId(txId: string): Promise<void> {
         await this.db.execute('DELETE FROM expenses WHERE transactionId = ?', [txId]);
     }
+
+    // --- Ignored / Personal Transactions ---
+
+    async ignoreTransaction(txId: string): Promise<void> {
+        await this.db.execute('INSERT OR IGNORE INTO ignored_transactions (transactionId) VALUES (?)', [txId]);
+    }
+
+    async unIgnoreTransaction(txId: string): Promise<void> {
+        await this.db.execute('DELETE FROM ignored_transactions WHERE transactionId = ?', [txId]);
+    }
+
+    async getIgnoredTransactionIds(): Promise<Set<string>> {
+        const result = await this.db.execute('SELECT transactionId FROM ignored_transactions');
+        const ids = new Set<string>();
+        if (result.rows) {
+            for (let i = 0; i < result.rows.length; i++) {
+                ids.add(result.rows.item(i).transactionId);
+            }
+        }
+        return ids;
+    }
+
+    // --- Updates ---
+
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount'>>): Promise<void> {
+        const sets: string[] = [];
+        const args: any[] = [];
+
+        if (updates.description !== undefined) {
+            sets.push('description = ?');
+            args.push(updates.description);
+        }
+        if (updates.categoryId !== undefined) {
+            sets.push('categoryId = ?');
+            args.push(updates.categoryId);
+        }
+        if (updates.amount !== undefined) {
+            sets.push('amount = ?');
+            args.push(updates.amount);
+        }
+
+        if (sets.length === 0) return;
+
+        args.push(id);
+        await this.db.execute(`UPDATE expenses SET ${sets.join(', ')} WHERE id = ?`, args);
+    }
 }

@@ -48,6 +48,13 @@ export class Database {
       );
     `);
 
+    // Create Ignored Transactions Table
+    db.execute(`
+      CREATE TABLE IF NOT EXISTS ignored_transactions (
+        transactionId TEXT PRIMARY KEY NOT NULL
+      );
+    `);
+
     // Check for transactionId column and migrate if missing
     try {
       const tableInfo = db.execute('PRAGMA table_info(expenses)');

@@ -1,5 +1,7 @@
 import { ExpenseRepository } from '../ledger/ExpenseRepository';
-import { Category, DEFAULT_CATEGORIES } from '../ledger/Schema';
+import { Category } from '../ledger/Schema';
+import { LlmClient } from '../llm/LlmClient';
+import { ModelManager } from '../llm/ModelManager';
 
 export interface ParsedExpense {
     amount: number;
@@ -29,6 +31,32 @@ export class NaturalLanguageParser {
      */
     public async parse(text: string): Promise<ParsedExpense | null> {
         const cleanedText = text.toLowerCase().trim();
+
+        // 0. Try LLM First (The Brain)
+        try {
+            const isReady = await ModelManager.isModelReady();
+            if (isReady) {
+                console.log("Parser: LLM is ready, attempting to categorize...");
+                const llmResult = await LlmClient.getInstance().categorize(text);
+
+                if (llmResult.amount && llmResult.amount > 0 && llmResult.category) {
+                    // Match category name to ID
+                    const cat = this.matchCategoryName(llmResult.category);
+
+                    console.log("Parser: LLM Success!", llmResult);
+                    return {
+                        amount: llmResult.amount,
+                        description: llmResult.description || text,
+                        categoryId: cat.id,
+                        confidence: 0.95
+                    };
+                }
+            }
+        } catch (e) {
+            console.warn("Parser: LLM failed, falling back to regex", e);
+        }
+
+        // --- FALLBACK (Regex + Keywords) ---
 
         // 1. Extract Amount (Regex)
         // Matches: "500", "500 bob", "ksh 500", "500.50"
@@ -61,6 +89,20 @@ export class NaturalLanguageParser {
             categoryId: category.id,
             confidence: category.name === 'Other' ? 0.5 : 0.9
         };
+    }
+
+    private matchCategoryName(name: string): Category {
+        const categories = this.repo.getAllCategories();
+        // Exact match
+        const exact = categories.find(c => c.name.toLowerCase() === name.toLowerCase());
+        if (exact) return exact;
+
+        // Partial match
+        const partial = categories.find(c => c.name.toLowerCase().includes(name.toLowerCase()));
+        if (partial) return partial;
+
+        // Default
+        return categories.find(c => c.name === 'Other') || categories[0];
     }
 
     private async categorizeByKeywords(description: string): Promise<Category> {
