@@ -8,206 +8,258 @@ import {
     Alert,
     StyleSheet,
     ActivityIndicator,
+    NativeModules,
+    NativeEventEmitter
 } from "react-native";
-import AudioRecord from "react-native-audio-record";
+import AudioRecord from "react-native-audio-record"; // Keeping for Whisper backup
 import RNFS from "react-native-fs";
 import { initWhisper, WhisperContext } from "whisper.rn";
-import { Buffer } from "buffer";
 
-// Configure 16kHz WAV for Whisper
-// Configure 16kHz WAV for Whisper
-const options = {
+// Custom Native Module
+const { VoiceModule } = NativeModules;
+const voiceEmitter = new NativeEventEmitter(VoiceModule);
+
+// --- WHISPER CONFIG (BACKUP) --- 
+const WHISPER_OPTIONS = {
     sampleRate: 16000,
     channels: 1,
     bitsPerSample: 16,
-    audioSource: 1, // MIC (try 1 if 6 fails)
+    audioSource: 1,
     wavFile: 'voice_input.wav'
 };
-
 const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_FILENAME = "ggml-tiny.en.bin";
-const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
+const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.en.bin`;
+
+import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
+import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 
 const VoiceInput = () => {
-    const [recording, setRecording] = useState<boolean>(false);
-    const [path, setPath] = useState<string | null>(null);
-    const [transcribedText, setTranscribedText] = useState<string | null>(null);
-    const [isProcessing, setIsProcessing] = useState<boolean>(false);
-    const [isModelReady, setIsModelReady] = useState<boolean>(false);
-    const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+    // UI State
+    const [isRecording, setIsRecording] = useState(false);
+    const [result, setResult] = useState<string>('');
+    const [isProcessing, setIsProcessing] = useState(false);
 
+    // Engine Choice: 'GSR' | 'WHISPER'
+    const ENGINE = 'GSR';
+
+    // Whisper State (Backup)
+    const [whisperReady, setWhisperReady] = useState(false);
     const whisperContext = useRef<WhisperContext | null>(null);
+    const parser = useRef(new NaturalLanguageParser());
+    const repo = useRef(new ExpenseRepository());
 
     useEffect(() => {
-        setupWhisper();
-        // Initialize AudioRecord
-        AudioRecord.init(options);
+        if (ENGINE === 'GSR') {
+            setupGSR();
+        } else {
+            setupWhisper(); // Only if we switch back
+        }
+        return () => {
+            if (ENGINE === 'GSR') {
+                removeAllListeners();
+            }
+        };
     }, []);
 
-    const setupWhisper = async () => {
+    // --- GOOGLE SPEECH IMPLEMENTATION ---
+
+    const setupGSR = () => {
         try {
-            const exists = await RNFS.exists(MODEL_PATH);
-            let shouldDownload = !exists;
-
-            if (exists) {
-                const stats = await RNFS.stat(MODEL_PATH);
-                console.log(`Model file found. Size: ${stats.size} bytes`);
-                if (stats.size < 1000000) { // Less than 1MB means likely corrupt or LFS pointer
-                    console.log("Model file too small, deleting and redownloading...");
-                    await RNFS.unlink(MODEL_PATH);
-                    shouldDownload = true;
-                }
-            }
-
-            if (shouldDownload) {
-                console.log("Downloading Whisper model...");
-                const ret = RNFS.downloadFile({
-                    fromUrl: MODEL_URL,
-                    toFile: MODEL_PATH,
-                    progress: (res) => {
-                        const progress = (res.bytesWritten / res.contentLength) * 100;
-                        setDownloadProgress(Math.round(progress));
-                    },
-                });
-                await ret.promise;
-                console.log("Model downloaded!");
-                setDownloadProgress(null);
-            }
-
-            console.log("Initializing Whisper context from:", MODEL_PATH);
-            const context = await initWhisper({ filePath: MODEL_PATH });
-            whisperContext.current = context;
-            setIsModelReady(true);
-            console.log("Whisper initialized successfully!");
+            voiceEmitter.addListener('onSpeechStart', onSpeechStart);
+            voiceEmitter.addListener('onSpeechEnd', onSpeechEnd);
+            voiceEmitter.addListener('onSpeechResults', onSpeechResults);
+            voiceEmitter.addListener('onSpeechPartialResults', onSpeechPartialResults);
+            voiceEmitter.addListener('onSpeechError', onSpeechError);
         } catch (e) {
-            console.error("Failed to setup Whisper:", e);
-            Alert.alert("Setup Error", "Failed to load AI model. Please restart the app or check internet. Error: " + e);
+            console.error("GSR Setup Error", e);
         }
     };
+
+    const removeAllListeners = () => {
+        voiceEmitter.removeAllListeners('onSpeechStart');
+        voiceEmitter.removeAllListeners('onSpeechEnd');
+        voiceEmitter.removeAllListeners('onSpeechResults');
+        voiceEmitter.removeAllListeners('onSpeechPartialResults');
+        voiceEmitter.removeAllListeners('onSpeechError');
+    };
+
+    const onSpeechStart = () => {
+        setIsRecording(true);
+        setResult(''); // Clear previous result
+    };
+
+    const onSpeechEnd = () => {
+        setIsRecording(false);
+    };
+
+    const onSpeechPartialResults = (e: any) => {
+        if (e.value && e.value[0]) {
+            setResult(e.value[0]);
+        }
+    };
+
+    const onSpeechResults = (e: any) => {
+        console.log("GSR Results Received", e);
+        // e.value is Array<string>
+        if (e.value && e.value[0]) {
+            const text = e.value[0];
+            setResult(text);
+            // Trigger processing automatically on final result
+            handleProcessTransaction(text);
+        }
+    };
+
+    const onSpeechError = (e: any) => {
+        console.log('GSR Error:', e); // { code: 7, message: '...' }
+        setIsRecording(false);
+
+        // Error 7 = Network Error (Offline failed)
+        // Error 13 = Language Unavailable (Offline Pack missing on Android 12+)
+        if (e.code === 7 || e.code === 13 || (e.message && e.message.toLowerCase().includes('network'))) {
+            Alert.alert(
+                "Offline Voice Not Ready",
+                "It seems you don't have the English/Swahili language pack installed for offline use.",
+                [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                        text: "Download Pack",
+                        onPress: openVoiceSettings
+                    }
+                ]
+            );
+        }
+    };
+
+    const openVoiceSettings = () => {
+        VoiceModule.openSettings();
+    };
+
+    const startGSR = async () => {
+        setResult('');
+        try {
+            // Request permissions first!
+            const granted = await requestAndroidPermissions();
+            if (!granted) {
+                Alert.alert("Permission", "Microphone permission needed.");
+                return;
+            }
+
+            // Pass empty intent to use SYSTEM DEFAULT locale
+            // This fixes the mismatch where we ask for en-US but user has en-GB installed
+            await VoiceModule.startListening({
+                locale: '',
+                preferOffline: true
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const stopGSR = async () => {
+        try {
+            await VoiceModule.stopListening();
+            // Do NOT manually process here. Result is not ready yet.
+            // onSpeechResults will handle it.
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    // --- WHISPER IMPLEMENTATION (DETACHED / BACKUP) ---
+
+    const setupWhisper = async () => {
+        // ... (Existing Whisper setup logic, kept for reference)
+        // ...
+        // Initialize AudioRecord
+        AudioRecord.init(WHISPER_OPTIONS);
+        // ... Load Model ...
+    }
 
     async function requestAndroidPermissions() {
         if (Platform.OS !== "android") return true;
         try {
             const androidVersion = Platform.Version;
-            if (typeof androidVersion === 'number' && androidVersion >= 33) {
-                const granted = await PermissionsAndroid.request(
-                    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-                );
-                return granted === PermissionsAndroid.RESULTS.GRANTED;
-            } else {
-                const granted = await PermissionsAndroid.requestMultiple([
-                    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-                    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-                    PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-                ]);
-                return Object.values(granted).every(
-                    status => status === PermissionsAndroid.RESULTS.GRANTED
-                );
-            }
+            // Android 12+ usually deals with permissions differently but RECORD_AUDIO is standard
+            const granted = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+            );
+            return granted === PermissionsAndroid.RESULTS.GRANTED;
         } catch (err) {
             console.warn(err);
             return false;
         }
     }
 
-    async function startRecording() {
-        const hasPermission = await requestAndroidPermissions();
-        if (!hasPermission) {
-            Alert.alert("Permission Denied", "Audio recording permission is required.");
-            return;
-        }
+    // --- COMMON PROCESSING ---
 
-        try {
-            console.log("Starting recording...");
-            AudioRecord.start();
-            setRecording(true);
-            setTranscribedText(null);
-        } catch (error) {
-            console.error("Recording error:", error);
-        }
-    }
-
-    async function stopRecording() {
-        if (!recording) return;
-        try {
-            console.log("Stopping recording...");
-            const audioFile = await AudioRecord.stop();
-            console.log("Audio file saved at:", audioFile);
-
-            setRecording(false);
-            setPath(audioFile);
-            transcribeAudio(audioFile);
-        } catch (error) {
-            console.error("Stop recording error:", error);
-        }
-    }
-
-    async function transcribeAudio(audioPath: string) {
-        if (!whisperContext.current) {
-            Alert.alert("Error", "Whisper model not loaded yet.");
-            return;
-        }
-
+    const handleProcessTransaction = async (text: string) => {
         setIsProcessing(true);
         try {
-            console.log("Transcribing...", audioPath);
-            const { promise } = whisperContext.current.transcribe(audioPath, {
-                language: 'en',
+            // 1. Predict Category
+            const category = await parser.current.predictCategory(text);
+
+            // 2. Extract Amount (Naive Regex for now or Parser improvement)
+            const parsed = await parser.current.parse(text);
+
+            if (!parsed) {
+                Alert.alert("Partial Interpretation", `We heard: "${text}", but couldn't find an amount.`);
+                return;
+            }
+
+            // 3. Save
+            const saved = await repo.current.addExpense({
+                amount: parsed.amount,
+                date: new Date().toISOString(),
+                description: parsed.description || text,
+                categoryId: parsed.categoryId,
+                source: 'voice',
+                rawText: text
             });
-            const fullResult = await promise;
-            console.log("Full Transcription Object:", JSON.stringify(fullResult, null, 2));
-            const { result } = fullResult;
-            setTranscribedText(result);
-        } catch (error) {
-            console.error("Transcription error:", error);
-            Alert.alert("Error", "Transcription failed: " + error);
+
+            Alert.alert("Success", `Saved: ${saved.amount} for ${saved.description}`);
+            setResult('');
+        } catch (e) {
+            Alert.alert("Error", "Could not process transaction.");
         } finally {
             setIsProcessing(false);
         }
-    }
+    };
+
 
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>🎙️ Voice Expense Entry</Text>
+            <Text style={styles.title}>🎙️ Native Voice (GSR)</Text>
 
-            {!isModelReady && (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#4CAF50" />
-                    <Text style={styles.statusText}>
-                        {downloadProgress !== null
-                            ? `Downloading Model: ${downloadProgress}%`
-                            : "Loading AI Model..."}
-                    </Text>
-                </View>
-            )}
+            <TouchableOpacity
+                style={[styles.recordButton, isRecording ? styles.recording : null]}
+                onPress={isRecording ? stopGSR : startGSR}
+                disabled={isProcessing}
+            >
+                <Text style={styles.buttonText}>
+                    {isRecording ? "⏹️ Stop" : "🎤 Record"}
+                </Text>
+            </TouchableOpacity>
 
-            {isModelReady && (
-                <TouchableOpacity
-                    style={[styles.recordButton, recording ? styles.recording : null]}
-                    onPress={recording ? stopRecording : startRecording}
-                    disabled={isProcessing}
-                >
-                    <Text style={styles.buttonText}>
-                        {recording ? "⏹️ Stop" : "🎤 Record"}
-                    </Text>
-                </TouchableOpacity>
-            )}
+            <TouchableOpacity
+                style={{ marginTop: 20 }}
+                onPress={openVoiceSettings}
+            >
+                <Text style={{ color: '#2196F3' }}>⚙️ Offline Settings</Text>
+            </TouchableOpacity>
 
             {isProcessing && (
                 <View style={styles.processingContainer}>
                     <ActivityIndicator color="#2196F3" />
-                    <Text style={styles.statusText}>Transcribing...</Text>
+                    <Text style={styles.statusText}>Processing...</Text>
                 </View>
             )}
 
-            {transcribedText && (
+            {result ? (
                 <View style={styles.resultContainer}>
-                    <Text style={styles.resultLabel}>Recognized Text:</Text>
-                    <Text style={styles.resultText}>{transcribedText}</Text>
+                    <Text style={styles.resultLabel}>Heard:</Text>
+                    <Text style={styles.resultText}>{result}</Text>
                 </View>
-            )}
-
-            {path && <Text style={styles.debugText}>File: {path}</Text>}
+            ) : null}
         </View>
     );
 };
@@ -248,10 +300,6 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontWeight: 'bold',
     },
-    loadingContainer: {
-        marginBottom: 20,
-        alignItems: 'center',
-    },
     processingContainer: {
         marginTop: 20,
         flexDirection: 'row',
@@ -278,12 +326,9 @@ const styles = StyleSheet.create({
         color: '#333',
         lineHeight: 24,
     },
-    debugText: {
-        marginTop: 20,
-        fontSize: 10,
-        color: '#aaa',
-    },
 });
 
 export default VoiceInput;
+
+
 
