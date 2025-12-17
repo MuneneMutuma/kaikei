@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { TouchableOpacity, Text } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -7,6 +8,7 @@ import SetupScreen from './src/screens/SetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
+import ModelDownloadScreen from './src/screens/ModelDownloadScreen';
 import { Database } from './src/services/ledger/Database';
 
 export type RootStackParamList = {
@@ -14,6 +16,7 @@ export type RootStackParamList = {
   Home: { name: string; persona: string };
   AddExpense: undefined;
   SmsReader: undefined;
+  ModelDownload: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -55,16 +58,17 @@ const App = () => {
 
           <Stack.Screen
             name="Home"
-            options={{ title: 'Home', headerBackVisible: false }}
-          >
-            {({ route, navigation }) => (
-              <HomeScreen
-                name={route.params.name}
-                persona={route.params.persona}
-                onNavigate={(screen) => navigation.navigate(screen as any)}
-              />
-            )}
-          </Stack.Screen>
+            component={HomeScreen}
+            options={({ navigation }: any) => ({
+              title: 'Kaikei',
+              headerBackVisible: false,
+              headerRight: () => (
+                <TouchableOpacity onPress={() => navigation.navigate('ModelDownload')} style={{ padding: 10 }}>
+                  <Text style={{ fontSize: 20 }}>🧠</Text>
+                </TouchableOpacity>
+              )
+            })}
+          />
 
           <Stack.Screen
             name="AddExpense"
@@ -76,6 +80,12 @@ const App = () => {
             name="SmsReader"
             component={SmsReaderScreen}
             options={{ title: 'SMS Reader' }}
+          />
+
+          <Stack.Screen
+            name="ModelDownload"
+            component={ModelDownloadScreen}
+            options={{ title: 'AI Settings' }}
           />
         </Stack.Navigator>
       </NavigationContainer>
