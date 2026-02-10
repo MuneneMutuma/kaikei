@@ -33,7 +33,20 @@ export class ExpenseRepository {
             ]
         );
 
-        return id;
+        const newExpense: Expense = {
+            id,
+            ...expense,
+            rawText: expense.rawText || undefined,
+            transactionId: expense.transactionId || undefined,
+            excludeFromAnalytics: expense.excludeFromAnalytics || false,
+            type: expense.type || 'expense',
+            sender: expense.sender || undefined,
+            recipient: expense.recipient || undefined,
+            isVerified: false,
+            synced: false
+        };
+
+        return newExpense;
     }
 
     /**
@@ -186,14 +199,36 @@ export class ExpenseRepository {
             `SELECT recipient, COUNT(*) as count, MAX(amount) as sampleAmount, MAX(date) as sampleDate, MAX(rawText) as rawText
              FROM expenses 
              WHERE recipient IS NOT NULL 
-             AND recipient NOT IN ('M_PESA', 'Unknown', 'Equitel', 'M-Shwari')
+             AND recipient NOT IN ('M-PESA', 'Unknown', 'Equitel', 'M-Shwari', 'POCHI')
              AND (categoryId IS NULL OR categoryId IN (SELECT id FROM categories WHERE name = 'Other'))
+             AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
              GROUP BY recipient 
              ORDER BY count DESC 
              LIMIT ?`,
             [limit]
         );
         return (result.rows?._array || []) as { recipient: string; count: number; sampleAmount: number; sampleDate: string; rawText: string }[];
+    }
+
+    /**
+     * Smart Onboarding: Get all uncategorized expenses for a specific recipient
+     */
+    public async getUncategorizedExpensesByRecipient(recipient: string): Promise<Expense[]> {
+        // Optimization: Fetch only top 100 to prevent UI lag. 
+        // Also pre-resolve 'Other' category to avoid subquery per row if possible, 
+        // but SQLite optimization usually handles the subquery well.
+        // The main key is LIMIT.
+        const result = await this.db.executeAsync(
+            `SELECT e.*
+             FROM expenses e
+             WHERE e.recipient = ? COLLATE NOCASE
+             AND (e.categoryId IS NULL OR e.categoryId IN (SELECT id FROM categories WHERE name = 'Other'))
+             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+             ORDER BY e.date DESC
+             LIMIT 100`,
+            [recipient]
+        );
+        return (result.rows?._array || []) as Expense[];
     }
 
     /**
@@ -266,79 +301,47 @@ export class ExpenseRepository {
     }
 
     public async scanAndFlagInternalTransfers() {
-        // Optimized: Only fetch rows with rawText to re-validate
+        // Optimized: ONLY fetch transactions that haven't been verified/processed yet
         const result = this.db.execute(
-            `SELECT id, rawText, type, excludeFromAnalytics FROM expenses 
-             WHERE rawText IS NOT NULL`
+            `SELECT id, rawText FROM expenses 
+             WHERE rawText IS NOT NULL AND isVerified = 0`
         );
 
-        if (!result.rows) return;
+        if (!result.rows || result.rows.length === 0) return;
 
-        const internalUpdates: string[] = [];
-        const incomeUpdates: string[] = [];
-        const expenseUpdates: string[] = [];
+        console.log(`Scanning ${result.rows.length} unverified transactions...`);
 
-        for (let i = 0; i < result.rows.length; i++) {
-            const row = result.rows.item(i);
-            const parsed = parseMpesaMessage(row.rawText);
-            if (!parsed) continue;
+        // Use a single transaction for all updates to prevent disk I/O bottleneck
+        this.db.execute('BEGIN TRANSACTION');
+        try {
+            for (let i = 0; i < result.rows.length; i++) {
+                const row = result.rows.item(i);
+                const parsed = parseMpesaMessage(row.rawText);
+                if (!parsed) continue;
 
-            const isInternal = parsed.type === 'internal' || parsed.direction === 'internal';
-
-            // 1. Fix Exclude Flag
-            if (isInternal && !row.excludeFromAnalytics) {
-                internalUpdates.push(row.id);
-            }
-
-            // 2. Fix Type (Income vs Expense)
-            // M-Pesa Centric: 
-            // Internal TO Mpesa = Income
-            // Internal FROM Mpesa = Expense
-            // Normal Income = parsed.direction == 'in'
-            let correctType = 'expense';
-            if (parsed.direction === 'in') {
-                correctType = 'income';
-            } else if (isInternal) {
-                // Determine if incoming to mpesa
-                if (parsed.to?.toUpperCase() === 'M-PESA' || parsed.direction === 'in') {
+                const isInternal = parsed.type === 'internal' || parsed.direction === 'internal';
+                // M-Pesa Centric Logic:
+                let correctType = 'expense';
+                if (parsed.direction === 'in') {
                     correctType = 'income';
+                } else if (isInternal) {
+                    // Internal TO Mpesa = Income
+                    if (parsed.to?.toUpperCase() === 'M-PESA' || parsed.direction === 'in') {
+                        correctType = 'income';
+                    }
                 }
-            }
 
-            if (row.type !== correctType) {
-                if (correctType === 'income') incomeUpdates.push(row.id);
-                else expenseUpdates.push(row.id);
+                // Update row: Mark as verified so we don't scan again
+                this.db.execute(
+                    `UPDATE expenses SET excludeFromAnalytics = ?, type = ?, isVerified = 1 WHERE id = ?`,
+                    [isInternal ? 1 : 0, correctType, row.id]
+                );
             }
-        }
-
-        // Apply Updates
-        const BATCH_SIZE = 100;
-
-        if (internalUpdates.length > 0) {
-            console.log(`Auto-Correction: Flagging ${internalUpdates.length} internal transfers.`);
-            for (let i = 0; i < internalUpdates.length; i += BATCH_SIZE) {
-                const batch = internalUpdates.slice(i, i + BATCH_SIZE);
-                const placeholders = batch.map(() => '?').join(',');
-                await this.db.execute(`UPDATE expenses SET excludeFromAnalytics = 0 WHERE id IN (${placeholders})`, batch);
-            }
-        }
-
-        if (incomeUpdates.length > 0) {
-            console.log(`Auto-Correction: Fixing ${incomeUpdates.length} transactions to INCOME.`);
-            for (let i = 0; i < incomeUpdates.length; i += BATCH_SIZE) {
-                const batch = incomeUpdates.slice(i, i + BATCH_SIZE);
-                const placeholders = batch.map(() => '?').join(',');
-                await this.db.execute(`UPDATE expenses SET type = 'income' WHERE id IN (${placeholders})`, batch);
-            }
-        }
-
-        if (expenseUpdates.length > 0) {
-            console.log(`Auto-Correction: Fixing ${expenseUpdates.length} transactions to EXPENSE.`);
-            for (let i = 0; i < expenseUpdates.length; i += BATCH_SIZE) {
-                const batch = expenseUpdates.slice(i, i + BATCH_SIZE);
-                const placeholders = batch.map(() => '?').join(',');
-                await this.db.execute(`UPDATE expenses SET type = 'expense' WHERE id IN (${placeholders})`, batch);
-            }
+            this.db.execute('COMMIT');
+            console.log("Batch update committed.");
+        } catch (e) {
+            this.db.execute('ROLLBACK');
+            console.error("Batch update failed", e);
         }
     }
 

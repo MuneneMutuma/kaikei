@@ -226,7 +226,7 @@ export default function SMSReaderScreen() {
           source: 'mpesa',
           rawText: tx.raw_text,
           transactionId: tx.tx_id,
-          excludeFromAnalytics: false, // User wants internal transfers INCLUDED now
+          excludeFromAnalytics: isInternal, // Prevent double counting for internal moves
           type: type,
           sender: sender,
           recipient: recipient
@@ -293,7 +293,7 @@ export default function SMSReaderScreen() {
         source: 'mpesa',
         rawText: item.raw_text,
         transactionId: item.tx_id,
-        excludeFromAnalytics: false // User wants internal transfers INCLUDED
+        excludeFromAnalytics: isInternal // Prevent double counting for internal moves
       });
 
       // Update Set

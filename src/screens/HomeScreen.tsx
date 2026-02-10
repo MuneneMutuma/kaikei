@@ -1,15 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  RefreshControl,
-  Modal,
-  TextInput,
-  Alert
-} from "react-native";
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
+  RefreshControl, Alert, ActivityIndicator, Image, Modal,
+  InteractionManager, TextInput
+} from 'react-native';
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { Expense, Category } from "../services/ledger/Schema";
 import { useFocusEffect } from '@react-navigation/native';
@@ -77,79 +71,76 @@ export default function HomeScreen({ navigation }: any) {
   const fetchData = useCallback(async () => {
     setLoading(true);
 
-    // Auto-fix internal transfers
-    await repo.scanAndFlagInternalTransfers();
-
-    // Check for Smart Suggestions (Onboarding)
     try {
-      const suggestions = onboardingService.getTopPayees(1);
-      if (suggestions.length > 0) {
-        setSuggestion(suggestions[0]);
-      } else {
-        setSuggestion(null);
-      }
-    } catch (e) {
-      console.log("Error fetching suggestion:", e);
-    }
+      // 1. Critical Data (Load Immediately)
+      // Default to current month for Home Screen
+      const now = new Date();
+      const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const allExpenses = await repo.getExpensesByMonth(monthStr);
+      setExpenses(allExpenses);
 
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-    const data = repo.getExpensesByMonth(currentMonth);
+      // Calculate Summary Live
+      const spent = allExpenses
+        .filter(e => e.type === 'expense' && !e.excludeFromAnalytics)
+        .reduce((sum, e) => sum + e.amount, 0);
 
-    // Sort desc date
-    data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const income = allExpenses
+        .filter(e => e.type === 'income' && !e.excludeFromAnalytics)
+        .reduce((sum, e) => sum + e.amount, 0);
 
-    setExpenses(data);
+      setTotalSpent(spent);
+      setTotalIncome(income);
 
-    // Calculate Stats
-    const expenseItems = data.filter(item =>
-      item.type !== 'income' && !item.excludeFromAnalytics
-    );
-    const total = expenseItems.reduce((sum, item) => sum + item.amount, 0);
-    setTotalSpent(total);
-
-    const incomeItems = data.filter(item =>
-      item.type === 'income' && !item.excludeFromAnalytics
-    );
-    const income = incomeItems.reduce((sum, item) => sum + item.amount, 0);
-    setTotalIncome(income);
-
-    if (total > 0) {
+      // Simple category breakdown for the month
+      // You might want to move this to a repo method if it gets too heavy, 
+      // but for < 1000 items JS reduce is faster than SQL bridge overhead often.
       const catMap = new Map<string, number>();
-      expenseItems.forEach(item => {
-        const current = catMap.get(item.categoryName || 'Other') || 0;
-        catMap.set(item.categoryName || 'Other', current + item.amount);
+      allExpenses.filter(e => e.type === 'expense' && !e.excludeFromAnalytics).forEach(e => {
+        const cat = e.categoryName || 'Uncategorized';
+        catMap.set(cat, (catMap.get(cat) || 0) + e.amount);
       });
 
-      const stats: any[] = [];
-      let topName = '';
-      let topAmount = 0;
-
-      catMap.forEach((amt, name) => {
-        if (amt > topAmount) {
-          topAmount = amt;
-          topName = name;
-        }
-        stats.push({
+      const breakdown = Array.from(catMap.entries())
+        .map(([name, amount]) => ({
           name,
-          amount: amt,
-          percent: Math.round((amt / total) * 100),
+          amount,
+          percentage: (amount / spent) * 100,
           color: getCategoryColor(name),
-          icon: getCategoryIcon(name),
-        });
-      });
+          icon: getCategoryIcon(name)
+        }))
+        .sort((a, b) => b.amount - a.amount);
 
-      setTopCategory({
-        name: topName,
-        amount: topAmount,
-        percent: Math.round((topAmount / total) * 100)
-      });
-      setBreakdownData(stats);
-    } else {
-      setTopCategory(undefined);
-      setBreakdownData([]);
+      setBreakdownData(breakdown);
+      if (breakdown.length > 0) {
+        setTopCategory({ name: breakdown[0].name, amount: breakdown[0].amount, percent: breakdown[0].percentage });
+      }
+
+      // Load Categories for Picker
+      const cats = await repo.getCategories();
+      setCategories(cats);
+
+    } catch (e) {
+      console.error("Failed to load home data", e);
     }
 
-    setCategories(repo.getAllCategories());
+    // 2. Run heavy background tasks AFTER the list is rendered (InteractionManager)
+    InteractionManager.runAfterInteractions(async () => {
+      // Auto-fix internal transfers (Now optimized with index)
+      await repo.scanAndFlagInternalTransfers();
+
+      // Check for Smart Suggestions (Onboarding) - Lazy Metadata
+      try {
+        const suggestions = await onboardingService.getTopPayees(1);
+        if (suggestions.length > 0) {
+          setSuggestion(suggestions[0]);
+        } else {
+          setSuggestion(null);
+        }
+      } catch (e) {
+        console.log("Error fetching suggestion:", e);
+      }
+    });
+
     setLoading(false);
   }, [repo, onboardingService]);
 
@@ -164,12 +155,35 @@ export default function HomeScreen({ navigation }: any) {
       Alert.alert("Awesome! 🚀", `Categorized ${count} transactions for ${suggestion.name}.`);
       setSuggestion(null); // Dismiss
       setEditCategoryId(""); // Reset
+      setSuggestionTransactions([]); // Clear data
       fetchData(); // Refresh UI
     } catch (e) {
       Alert.alert("Error", "Failed to update transactions.");
     } finally {
       setIsUpdatingSuggestion(false);
     }
+  };
+
+  // Smart Suggestion Detail Modal Logic
+  const [suggestionModalVisible, setSuggestionModalVisible] = useState(false);
+  const handleOpenSuggestionDetails = () => {
+    if (!suggestion) return;
+    navigation.navigate('SmartSuggestion', { name: suggestion.name, count: suggestion.count });
+  };
+
+  const handleBatchCategorize = async (categoryId: string, selectedIds: string[]) => {
+    // We can use bulkUpdateCategory but restricted to IDs? 
+    // Repo's bulkUpdateCategory is by recipient name (ALL). 
+    // To support selection, we need a new repo method or iterate updates.
+    // Iterating is safer for now.
+    for (const id of selectedIds) {
+      await repo.updateExpense(id, { categoryId, isVerified: true });
+    }
+    Alert.alert("Success", `Categorized ${selectedIds.length} transactions.`);
+    fetchData();
+    // Check if any left for this recipient? If no, remove suggestion.
+    const remaining = await repo.getUncategorizedExpensesByRecipient(suggestion?.name || '');
+    if (remaining.length === 0) setSuggestion(null);
   };
 
   const handleOpenDetails = useCallback((expense: Expense) => {
@@ -315,6 +329,7 @@ export default function HomeScreen({ navigation }: any) {
           }}
           onDismiss={() => setSuggestion(null)}
           onConfirm={handleConfirmSuggestion}
+          onOpenDetails={handleOpenSuggestionDetails}
         />
       )}
 
@@ -491,12 +506,12 @@ const styles = StyleSheet.create({
   personaBadge: { fontSize: 14, color: '#666', backgroundColor: '#E0E0E0', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, marginTop: 4, overflow: 'hidden' },
   profileButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5 },
 
-  actionContainer: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 20, paddingHorizontal: 10 },
-  actionBtn: { alignItems: 'center', width: 70 },
-  actionIcon: { fontSize: 24, marginBottom: 8, backgroundColor: 'white', padding: 12, borderRadius: 16, overflow: 'hidden', textAlign: 'center', width: 50, height: 50 },
-  actionLabel: { fontSize: 12, color: '#333', fontWeight: '500' },
+  actionContainer: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 12, paddingHorizontal: 10 },
+  actionBtn: { alignItems: 'center', width: 60 },
+  actionIcon: { fontSize: 20, marginBottom: 4, backgroundColor: 'white', padding: 10, borderRadius: 14, overflow: 'hidden', textAlign: 'center', width: 42, height: 42 },
+  actionLabel: { fontSize: 10, color: '#333', fontWeight: '500' },
 
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginTop: 20, marginBottom: 10, paddingHorizontal: 20 },
+  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#333', marginTop: 12, marginBottom: 8, paddingHorizontal: 20 },
 
   card: { flexDirection: 'row', backgroundColor: 'white', marginHorizontal: 20, marginBottom: 12, padding: 16, borderRadius: 16, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
   iconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center', marginRight: 15 },

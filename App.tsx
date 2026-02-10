@@ -11,6 +11,7 @@ import SmsReaderScreen from './src/screens/SmsReaderScreen';
 import ModelDownloadScreen from './src/screens/ModelDownloadScreen';
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import AdviceScreen from './src/screens/AdviceScreen';
+import { SmartSuggestionScreen } from './src/screens/SmartSuggestionScreen';
 import { Database } from './src/services/ledger/Database';
 
 export type RootStackParamList = {
@@ -21,6 +22,7 @@ export type RootStackParamList = {
   ModelDownload: undefined;
   Analytics: undefined;
   Advice: undefined;
+  SmartSuggestion: { name: string; count: number };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -101,6 +103,11 @@ const App = () => {
             name="Advice"
             component={AdviceScreen}
             options={{ title: 'AI Assistant' }}
+          />
+          <Stack.Screen
+            name="SmartSuggestion"
+            component={SmartSuggestionScreen}
+            options={{ headerShown: false }}
           />
         </Stack.Navigator>
       </NavigationContainer>

@@ -1,5 +1,5 @@
 import { ExpenseRepository } from '../ledger/ExpenseRepository';
-import { Category } from '../ledger/Schema';
+import { Category, Expense } from '../ledger/Schema';
 import { parseMpesaMessage, MpesaTransaction } from '../../utils/mpesaParser';
 
 export interface PayeeCandidate {
@@ -7,6 +7,7 @@ export interface PayeeCandidate {
     count: number;
     sample?: MpesaTransaction | null;
     suggestedCategory?: string;
+    transactions: Expense[];
 }
 
 export class SmartOnboardingService {
@@ -18,20 +19,38 @@ export class SmartOnboardingService {
 
     /**
      * Step 1: Find people you pay often who aren't categorized yet.
+     * LAZY LOADING: Returns metadata only. Details fetched on tap.
      */
-    public getTopPayees(limit: number = 5): PayeeCandidate[] {
+    public async getTopPayees(limit: number = 5): Promise<PayeeCandidate[]> {
         const raw = this.repo.getFrequentRecipients(limit);
-        return raw.map(r => {
+
+        const candidates: PayeeCandidate[] = [];
+
+        for (const r of raw) {
             let sample = null;
             if (r.rawText) {
                 sample = parseMpesaMessage(r.rawText);
+                if (sample && r.sampleDate) {
+                    sample.date = r.sampleDate;
+                }
             }
-            return {
+
+            candidates.push({
                 name: r.recipient,
                 count: r.count,
-                sample
-            };
-        });
+                sample,
+                transactions: [] // Empty = Lazy Load
+            });
+        }
+
+        return candidates;
+    }
+
+    /**
+     * Step 2: Fetch details when user taps the card
+     */
+    public async getTransactionsForRecipient(name: string): Promise<Expense[]> {
+        return await this.repo.getUncategorizedExpensesByRecipient(name);
     }
 
     /**

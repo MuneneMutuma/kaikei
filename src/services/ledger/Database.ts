@@ -31,6 +31,7 @@ export class Database {
       );
     `);
 
+
     // Create Expenses Table
     db.execute(`
       CREATE TABLE IF NOT EXISTS expenses (
@@ -54,6 +55,11 @@ export class Database {
         transactionId TEXT PRIMARY KEY NOT NULL
       );
     `);
+
+    // Initial Index Creation (moved from migrations for new installs)
+    db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');
+    db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
+    db.execute('CREATE INDEX IF NOT EXISTS idx_unverified_raw ON expenses(id) WHERE isVerified = 0 AND rawText IS NOT NULL');
 
     // Check for transactionId column and migrate if missing
     try {
@@ -98,6 +104,15 @@ export class Database {
         db.execute("ALTER TABLE expenses ADD COLUMN recipient TEXT");
       }
 
+      // 6. Migration: Index on recipient (for Smart Suggestions)
+      // Use NOCASE to match the query using COLLATE NOCASE
+      console.log('Migrating: Checking recipient index...');
+      db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');
+
+      // 7. Migration: Index on Date (for general sorting speed)
+      console.log('Migrating: Checking date index...');
+      db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
+
       // 5. Migration: isVerified
       const hasVerifiedCol = tableInfo.rows?._array.some((col: any) => col.name === 'isVerified');
       if (!hasVerifiedCol) {
@@ -121,5 +136,12 @@ export class Database {
         );
       });
     }
+  }
+
+  public async executeAsync(sql: string, params: any[] = []): Promise<any> {
+    const db = Database.getInstance();
+    // QuickSQLite 8.x supports executeAsync. 
+    // Note: The types might differ slightly, returning a Promise<QueryResult>
+    return db.executeAsync(sql, params);
   }
 }

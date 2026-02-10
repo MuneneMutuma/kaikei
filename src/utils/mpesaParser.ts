@@ -15,6 +15,7 @@ export interface MpesaTransaction {
   tx_cost?: number;
   source: 'mpesa';
   raw_text: string;
+  excludeFromAnalytics?: boolean;
   balances: {
     mpesa?: number;
     pochi?: number;
@@ -78,6 +79,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   let to = '';
   let phone: string | undefined;
   let account: string | undefined;
+  let excludeFromAnalytics = false;
 
   // Balance dictionary
   const balances: MpesaTransaction['balances'] = {};
@@ -89,6 +91,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
     direction = 'internal';
     type = 'internal';
     action = 'has been moved';
+    excludeFromAnalytics = true;
 
     const fromMatch = text.match(/moved from your ([A-Za-z\-\s]+?) account/i);
     const toMatch = text.match(/to your ([A-Za-z\-\s]+?) account/i);
@@ -117,6 +120,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
     direction = 'internal';
     type = 'internal';
     action = 'mshwari transfer';
+    excludeFromAnalytics = true;
 
     const isToMshwari = /transferred to M-?Shwari/i.test(text);
     from = isToMshwari ? 'M-PESA' : 'M-SHWARI';
@@ -249,6 +253,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
     tx_cost,
     source: 'mpesa',
     raw_text: raw,
+    excludeFromAnalytics,
     balances,
   };
 };

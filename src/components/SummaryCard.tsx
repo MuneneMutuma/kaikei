@@ -58,50 +58,50 @@ const SummaryCard: React.FC<SummaryCardProps> = ({ month, totalSpent, totalIncom
 const styles = StyleSheet.create({
     card: {
         backgroundColor: '#2196F3',
-        borderRadius: 20,
-        padding: 20,
-        marginBottom: 20,
-        elevation: 5,
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 12,
+        elevation: 3,
         shadowColor: '#2196F3',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 5,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3,
     },
     headerRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 15,
+        marginBottom: 8,
     },
     label: {
         color: 'rgba(255, 255, 255, 0.9)',
-        fontSize: 14,
+        fontSize: 11,
         fontWeight: '600',
         textTransform: 'uppercase',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     currencyIcon: {
-        fontSize: 20,
+        fontSize: 16,
     },
     balanceRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        marginBottom: 10,
+        marginBottom: 6,
     },
     subLabel: {
         color: 'rgba(255,255,255,0.7)',
-        fontSize: 12,
-        marginBottom: 2
+        fontSize: 10,
+        marginBottom: 1
     },
     amount: {
         color: '#fff',
-        fontSize: 24,
+        fontSize: 20,
         fontWeight: 'bold',
     },
     divider: {
         height: 1,
         backgroundColor: 'rgba(255,255,255,0.2)',
-        marginVertical: 10
+        marginVertical: 6
     },
     statsRow: {
         flexDirection: 'row',
@@ -112,12 +112,12 @@ const styles = StyleSheet.create({
     },
     statLabel: {
         color: 'rgba(255, 255, 255, 0.7)',
-        fontSize: 12,
-        marginBottom: 2,
+        fontSize: 10,
+        marginBottom: 1,
     },
     statValue: {
         color: '#fff',
-        fontSize: 15,
+        fontSize: 13,
         fontWeight: '600',
     },
 });
