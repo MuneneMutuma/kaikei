@@ -70,6 +70,41 @@ export class Database {
       } else {
         console.log('Database is up to date (transactionId exists).');
       }
+
+      // 2. Migration: excludeFromAnalytics (for internal transfers)
+      const hasExcludeCol = tableInfo.rows?._array.some((col: any) => col.name === 'excludeFromAnalytics');
+      if (!hasExcludeCol) {
+        console.log('Migrating: Adding excludeFromAnalytics column...');
+        db.execute('ALTER TABLE expenses ADD COLUMN excludeFromAnalytics BOOLEAN DEFAULT 0');
+      }
+
+      // 3. Migration: type (income vs expense)
+      const hasTypeCol = tableInfo.rows?._array.some((col: any) => col.name === 'type');
+      if (!hasTypeCol) {
+        console.log('Migrating: Adding type column...');
+        db.execute("ALTER TABLE expenses ADD COLUMN type TEXT DEFAULT 'expense'");
+      }
+
+      // 4. Migration: sender and recipient
+      const hasSenderCol = tableInfo.rows?._array.some((col: any) => col.name === 'sender');
+      if (!hasSenderCol) {
+        console.log('Migrating: Adding sender column...');
+        db.execute("ALTER TABLE expenses ADD COLUMN sender TEXT");
+      }
+
+      const hasRecipientCol = tableInfo.rows?._array.some((col: any) => col.name === 'recipient');
+      if (!hasRecipientCol) {
+        console.log('Migrating: Adding recipient column...');
+        db.execute("ALTER TABLE expenses ADD COLUMN recipient TEXT");
+      }
+
+      // 5. Migration: isVerified
+      const hasVerifiedCol = tableInfo.rows?._array.some((col: any) => col.name === 'isVerified');
+      if (!hasVerifiedCol) {
+        console.log('Migrating: Adding isVerified column...');
+        db.execute("ALTER TABLE expenses ADD COLUMN isVerified BOOLEAN DEFAULT 0");
+      }
+
     } catch (e) {
       console.error('Migration failed:', e);
     }

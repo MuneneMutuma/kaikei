@@ -4,35 +4,53 @@ import { View, Text, StyleSheet } from 'react-native';
 type SummaryCardProps = {
     month: string;
     totalSpent: number;
+    totalIncome: number;
     topCategory?: { name: string; amount: number; percent: number };
 };
 
-const SummaryCard: React.FC<SummaryCardProps> = ({ month, totalSpent, topCategory }) => {
+const SummaryCard: React.FC<SummaryCardProps> = ({ month, totalSpent, totalIncome, topCategory }) => {
+    const net = totalIncome - totalSpent;
+
     return (
         <View style={styles.card}>
             <View style={styles.headerRow}>
-                <Text style={styles.label}>Total Spent ({month})</Text>
+                <Text style={styles.label}>Cash Flow ({month})</Text>
                 <Text style={styles.currencyIcon}>🇰🇪</Text>
             </View>
 
-            <Text style={styles.amount}>
-                Ksh {totalSpent.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-            </Text>
+            <View style={styles.balanceRow}>
+                <View>
+                    <Text style={styles.subLabel}>Income</Text>
+                    <Text style={[styles.amount, { color: '#4CAF50' }]}>
+                        +{totalIncome.toLocaleString()}
+                    </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.subLabel}>Spent</Text>
+                    <Text style={styles.amount}>
+                        -{totalSpent.toLocaleString()}
+                    </Text>
+                </View>
+            </View>
 
-            {topCategory && (
-                <View style={styles.statsRow}>
-                    <View style={styles.stat}>
-                        <Text style={styles.statLabel}>Top Category</Text>
+            <View style={styles.divider} />
+
+            <View style={styles.statsRow}>
+                <View style={styles.stat}>
+                    <Text style={styles.statLabel}>Net Balance</Text>
+                    <Text style={[styles.statValue, { color: net >= 0 ? '#E8F5E9' : '#FFEBEE' }]}>
+                        {net >= 0 ? '+' : ''} {net.toLocaleString()}
+                    </Text>
+                </View>
+                {topCategory && (
+                    <View style={[styles.stat, { alignItems: 'flex-end' }]}>
+                        <Text style={styles.statLabel}>Top Expense</Text>
                         <Text style={styles.statValue}>
                             {topCategory.name} ({topCategory.percent}%)
                         </Text>
                     </View>
-                    <View style={styles.stat}>
-                        <Text style={styles.statLabel}>Remaining</Text>
-                        <Text style={styles.statValue}>--</Text>
-                    </View>
-                </View>
-            )}
+                )}
+            </View>
         </View>
     );
 };
@@ -53,7 +71,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 5,
+        marginBottom: 15,
     },
     label: {
         color: 'rgba(255, 255, 255, 0.9)',
@@ -65,18 +83,29 @@ const styles = StyleSheet.create({
     currencyIcon: {
         fontSize: 20,
     },
+    balanceRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+    },
+    subLabel: {
+        color: 'rgba(255,255,255,0.7)',
+        fontSize: 12,
+        marginBottom: 2
+    },
     amount: {
         color: '#fff',
-        fontSize: 36,
+        fontSize: 24,
         fontWeight: 'bold',
-        marginBottom: 20,
+    },
+    divider: {
+        height: 1,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        marginVertical: 10
     },
     statsRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        backgroundColor: 'rgba(255, 255, 255, 0.15)',
-        borderRadius: 12,
-        padding: 15,
     },
     stat: {
         flex: 1,

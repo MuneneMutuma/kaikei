@@ -38,21 +38,21 @@ const normalizeText = (text: string) =>
 export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   const text = normalizeText(raw);
 
-    // Handle known failure messages that don't change balances
-    const failurePatterns = [
-      /unable to process your request/i,                         // Another transaction taking place
-      /unable to complete the transaction/i,                     // Failed transaction
-      /you do not have sufficient funds/i,                       // Insufficient balance
-      /insufficient funds in your/i,                             // Insufficient funds
-      /transaction could not be completed/i,                     // Generic failure
-      /transaction failed/i,                                     // Explicit failure notice,
-      /you have entered the wrong PIN/i                  // Wrong PIN
-    ];
+  // Handle known failure messages that don't change balances
+  const failurePatterns = [
+    /unable to process your request/i,                         // Another transaction taking place
+    /unable to complete the transaction/i,                     // Failed transaction
+    /you do not have sufficient funds/i,                       // Insufficient balance
+    /insufficient funds in your/i,                             // Insufficient funds
+    /transaction could not be completed/i,                     // Generic failure
+    /transaction failed/i,                                     // Explicit failure notice,
+    /you have entered the wrong PIN/i                  // Wrong PIN
+  ];
 
-    // If message matches any failure pattern, drop it
-    if (failurePatterns.some((p) => p.test(text))) {
-      return null; // Ignore failed / incomplete transactions
-    }
+  // If message matches any failure pattern, drop it
+  if (failurePatterns.some((p) => p.test(text))) {
+    return null; // Ignore failed / incomplete transactions
+  }
 
 
   // Extract TX_ID
@@ -83,9 +83,58 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   const balances: MpesaTransaction['balances'] = {};
 
   /** =========================
-   * CASE 1: Money RECEIVED
+   *  CASE 1: Internal MOVEMENT (M-PESA <-> POCHI)
+   *  ========================= */
+  if (/has been moved/i.test(text)) {
+    direction = 'internal';
+    type = 'internal';
+    action = 'has been moved';
+
+    const fromMatch = text.match(/moved from your ([A-Za-z\-\s]+?) account/i);
+    const toMatch = text.match(/to your ([A-Za-z\-\s]+?) account/i);
+
+    if (fromMatch) {
+      const fromRaw = fromMatch[1].trim().toLowerCase();
+      from = /business/i.test(fromRaw) ? 'POCHI' : 'M-PESA';
+    }
+
+    if (toMatch) {
+      const toRaw = toMatch[1].trim().toLowerCase();
+      to = /business/i.test(toRaw) ? 'POCHI' : 'M-PESA';
+    }
+
+    const mpesaBalMatch = text.match(/New\s+M-?PESA balance is Ksh\.?\s?([\d.,]+)/i);
+    const businessBalMatch = text.match(/New\s+Business balance is Ksh\.?\s?([\d.,]+)/i);
+
+    if (mpesaBalMatch) balances.mpesa = parseFloat(mpesaBalMatch[1].replace(/,/g, ''));
+    if (businessBalMatch) balances.pochi = parseFloat(businessBalMatch[1].replace(/,/g, ''));
+  }
+
+  /** =========================
+   *  CASE 2: M-SHWARI TRANSFER
+   *  ========================= */
+  else if (/M-?Shwari/i.test(text) && /transferred/i.test(text)) {
+    direction = 'internal';
+    type = 'internal';
+    action = 'mshwari transfer';
+
+    const isToMshwari = /transferred to M-?Shwari/i.test(text);
+    from = isToMshwari ? 'M-PESA' : 'M-SHWARI';
+    to = isToMshwari ? 'M-SHWARI' : 'M-PESA';
+
+    const mpesaBalMatch = text.match(/M-?PESA balance is Ksh\.?\s?([\d.,]+)/i);
+    const mshwariBalMatch = text.match(/(?:New\s*)?M-?Shwari(?:\s+saving\s+account)?\s+balance\s+is\s+Ksh\.?\s?([\d,]+(?:\.\d{1,2})?)/i);
+    const costMatch2 = text.match(/Transaction cost Ksh\.?\s?([\d.,]+)/i);
+
+    if (mpesaBalMatch) balances.mpesa = parseFloat(mpesaBalMatch[1].replace(/,/g, ''));
+    if (mshwariBalMatch) balances.mshwari = parseFloat(mshwariBalMatch[1].replace(/,/g, ''));
+    if (costMatch2) tx_cost = parseFloat(costMatch2[1].replace(/,/g, ''));
+  }
+
+  /** =========================
+   * CASE 3: Money RECEIVED
    * ========================= */
-  if (/you have received/i.test(text)) {
+  else if (/you have received/i.test(text)) {
     direction = 'in';
     type = 'received';
     action = 'received from';
@@ -128,7 +177,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   }
 
   /** =========================
-   * CASE 2: Money SENT / PAID
+   * CASE 4: Money SENT / PAID
    * ========================= */
   else if (/(sent to|paid to|transferred to)/i.test(text)) {
     direction = 'out';
@@ -172,55 +221,6 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
 
     if (businessBalMatch) balances.pochi = parseFloat(businessBalMatch[1]);
     if (personalBalMatch) balances.mpesa = parseFloat(personalBalMatch[1]);
-  }
-
-  /** =========================
-   *  CASE 3: Internal MOVEMENT (M-PESA <-> POCHI)
-   *  ========================= */
-  else if (/has been moved/i.test(text)) {
-    direction = 'internal';
-    type = 'internal';
-    action = 'has been moved';
-
-    const fromMatch = text.match(/moved from your ([A-Za-z\-\s]+?) account/i);
-    const toMatch = text.match(/to your ([A-Za-z\-\s]+?) account/i);
-
-    if (fromMatch) {
-      const fromRaw = fromMatch[1].trim().toLowerCase();
-      from = /business/i.test(fromRaw) ? 'POCHI' : 'M-PESA';
-    }
-
-    if (toMatch) {
-      const toRaw = toMatch[1].trim().toLowerCase();
-      to = /business/i.test(toRaw) ? 'POCHI' : 'M-PESA';
-    }
-
-    const mpesaBalMatch = text.match(/New\s+M-?PESA balance is Ksh\.?\s?([\d.,]+)/i);
-    const businessBalMatch = text.match(/New\s+Business balance is Ksh\.?\s?([\d.,]+)/i);
-
-    if (mpesaBalMatch) balances.mpesa = parseFloat(mpesaBalMatch[1].replace(/,/g, ''));
-    if (businessBalMatch) balances.pochi = parseFloat(businessBalMatch[1].replace(/,/g, ''));
-  }
-
-  /** =========================
-   *  CASE 4: M-SHWARI TRANSFER
-   *  ========================= */
-  else if (/M-?Shwari/i.test(text) && /transferred/i.test(text)) {
-    direction = 'internal';
-    type = 'internal';
-    action = 'mshwari transfer';
-
-    const isToMshwari = /transferred to M-?Shwari/i.test(text);
-    from = isToMshwari ? 'M-PESA' : 'M-SHWARI';
-    to = isToMshwari ? 'M-SHWARI' : 'M-PESA';
-
-    const mpesaBalMatch = text.match(/M-?PESA balance is Ksh\.?\s?([\d.,]+)/i);
-    const mshwariBalMatch = text.match(/(?:New\s*)?M-?Shwari(?:\s+saving\s+account)?\s+balance\s+is\s+Ksh\.?\s?([\d,]+(?:\.\d{1,2})?)/i);
-    const costMatch2 = text.match(/Transaction cost Ksh\.?\s?([\d.,]+)/i);
-
-    if (mpesaBalMatch) balances.mpesa = parseFloat(mpesaBalMatch[1].replace(/,/g, ''));
-    if (mshwariBalMatch) balances.mshwari = parseFloat(mshwariBalMatch[1].replace(/,/g, ''));
-    if (costMatch2) tx_cost = parseFloat(costMatch2[1].replace(/,/g, ''));
   }
 
   /** =========================

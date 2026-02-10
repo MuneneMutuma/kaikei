@@ -7,6 +7,7 @@ export interface ParsedExpense {
     amount: number;
     description: string;
     categoryId: string;
+    categoryName?: string;
     confidence: number;
 }
 
@@ -48,6 +49,7 @@ export class NaturalLanguageParser {
                         amount: llmResult.amount,
                         description: llmResult.description || text,
                         categoryId: cat.id,
+                        categoryName: cat.name,
                         confidence: 0.95
                     };
                 }
@@ -87,6 +89,7 @@ export class NaturalLanguageParser {
             amount,
             description,
             categoryId: category.id,
+            categoryName: category.name,
             confidence: category.name === 'Other' ? 0.5 : 0.9
         };
     }

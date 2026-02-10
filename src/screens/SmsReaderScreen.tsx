@@ -113,10 +113,11 @@ export default function SMSReaderScreen() {
     // Fallback: Lazy load status? No, UI needs it. 
     // I already have `syncedTxIds` state. I should update it based on current View.
 
+    // 116 -> 500 Limit
     const filter = {
       box: "inbox",
       address: "MPESA",
-      maxCount: 50,
+      maxCount: 1000, // Increased limit per user request
     };
 
     SmsAndroid.list(
@@ -146,103 +147,195 @@ export default function SMSReaderScreen() {
     );
   };
 
-  const handleMarkBusiness = async (tx: MpesaTransaction) => {
-    // 1. Predict Category
-    const descriptionToParse = `${tx.from} ${tx.to} ${tx.type} `;
-    const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
-    const categoryId = categorySuggestion?.id || repo.current.getCategoryByName('Other')?.id || 'unknown_cat';
+  const handleSelectAll = async () => {
+    // Bulk Import Logic
+    if (loading) return;
+    setLoading(true);
 
-    const cleanDesc = tx.direction === 'in'
-      ? `Received from ${tx.from} `
-      : `Paid to ${tx.to || tx.account || 'Unknown'} `;
+    // Filter unsynced, unignored transactions (candidates)
+    const candidates = transactions.filter(tx =>
+      !syncedTxIds.has(tx.tx_id) && !ignoredTxIds.has(tx.tx_id)
+    );
 
-    // 2. Add to Ledger
-    await repo.current.addExpense({
-      amount: tx.amount,
-      date: parseMpesaDate(tx.date, tx.time),
-      description: cleanDesc,
-      categoryId: categoryId,
-      source: 'mpesa',
-      rawText: tx.raw_text,
-      transactionId: tx.tx_id
-    });
-
-    // 3. Update State
-    setSyncedTxIds(prev => new Set(prev).add(tx.tx_id));
-
-    // Remove from ignored if it was there (changed mind)
-    if (ignoredTxIds.has(tx.tx_id)) {
-      await repo.current.unIgnoreTransaction(tx.tx_id);
-      setIgnoredTxIds(prev => {
-        const next = new Set(prev);
-        next.delete(tx.tx_id);
-        return next;
-      });
+    if (candidates.length === 0) {
+      Alert.alert("Info", "No new transactions to import.");
+      setLoading(false);
+      return;
     }
+
+    // Confirm
+    /* // Optional confirmation
+    Alert.alert("Confirm Import", `Import ${candidates.length} transactions?`, [
+        { text: "Cancel", onPress: () => setLoading(false) },
+        { text: "Import", onPress: () => performBulkImport(candidates) }
+    ]);
+    */
+    // Just do it for now (Toggle style)
+    await performBulkImport(candidates);
   };
 
-  const handleMarkPersonal = async (tx: MpesaTransaction) => {
-    await repo.current.ignoreTransaction(tx.tx_id);
-    setIgnoredTxIds(prev => new Set(prev).add(tx.tx_id));
+  const performBulkImport = async (candidates: MpesaTransaction[]) => {
+    let count = 0;
+    // Process in chunks to yield UI? JS is single threaded but we can use setTimeout or just await.
+    // Await inside loop yields to microtasks, but not necessarily rendering if synchronous DB calls are heavy.
+    // SQLite is async-ish (bridge).
 
-    // If it was synced, remove it?
-    if (syncedTxIds.has(tx.tx_id)) {
-      await repo.current.deleteByTransactionId(tx.tx_id);
-      setSyncedTxIds(prev => {
-        const next = new Set(prev);
-        next.delete(tx.tx_id);
-        return next;
-      });
+    for (const tx of candidates) {
+      try {
+        // Re-use logic (abstracted ideally, but copying for safety/speed now)
+        // 1. Predict Category (Fast Regex)
+        const descriptionToParse = `${tx.from} ${tx.to} ${tx.type} `;
+        const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
+        const categoryId = categorySuggestion?.id || repo.current.getCategoryByName('Other')?.id || 'unknown_cat';
+
+        const cleanDesc = tx.direction === 'in'
+          ? `Received from ${tx.from} `
+          : `Paid to ${tx.to || tx.account || 'Unknown'} `;
+
+        // NEW: Check internal
+        const isInternal = tx.type === 'internal' || tx.direction === 'internal';
+
+        // Determine Type (Income/Expense)
+        let type: 'income' | 'expense' = 'expense';
+        if (tx.direction === 'in') {
+          type = 'income';
+        } else if (isInternal) {
+          // M-PESA Centric
+          if (tx.from?.toUpperCase() === 'M-PESA') type = 'expense';
+          else type = 'income';
+        }
+
+        // Determine Sender / Recipient
+        let sender = 'Unknown';
+        let recipient = 'Unknown';
+
+        if (type === 'income') {
+          sender = tx.from;
+          recipient = 'M-PESA'; // Or 'You'
+        } else {
+          sender = 'M-PESA'; // Or 'You'
+          recipient = tx.to || tx.account || 'Unknown';
+        }
+
+        // 2. Add to Ledger
+        await repo.current.addExpense({
+          amount: tx.amount,
+          date: parseMpesaDate(tx.date, tx.time),
+          description: cleanDesc,
+          categoryId: categoryId,
+          source: 'mpesa',
+          rawText: tx.raw_text,
+          transactionId: tx.tx_id,
+          excludeFromAnalytics: false, // User wants internal transfers INCLUDED now
+          type: type,
+          sender: sender,
+          recipient: recipient
+        });
+        count++;
+      } catch (e) {
+        console.error("Failed to import", tx.tx_id, e);
+      }
     }
+
+    // Update State Once
+    const newSynced = new Set(syncedTxIds);
+    candidates.forEach(c => newSynced.add(c.tx_id));
+    setSyncedTxIds(newSynced);
+    setLoading(false);
+    Alert.alert("Success", `Imported ${count} transactions.`);
   };
 
-  const handleToggleBusiness = async (tx: MpesaTransaction) => {
-    const isSynced = syncedTxIds.has(tx.tx_id);
-    if (isSynced) {
-      // Change to Personal (Remove from Ledger, Add to Ignored)
-      await handleMarkPersonal(tx);
-    } else {
-      // Change to Business (Add to Ledger, Remove from Ignored)
-      await handleMarkBusiness(tx);
-    }
-  };
-
-  const openDetails = async (tx: MpesaTransaction) => {
+  const openDetails = (tx: MpesaTransaction) => {
     setSelectedTx(tx);
-    const isSynced = syncedTxIds.has(tx.tx_id);
-
-    if (isSynced) {
-      // Fetch existing details to populate edit fields
-      // Since we don't have "getExpenseByTxID" plainly exposed but we have "deleteByTxId", 
-      // let's assume we use default/parsed values OR fetch.
-      // For now, to keep it fast, we use parsed values, but if we edited it before, we lose edits unless we fetch.
-      // Let's just use defaults for now (V1 Limitation) or ideally fetch.
-      // TODO: Fetch real expense data.
-
-      setEditDescription(tx.direction === 'in' ? `Received from ${tx.from} ` : `Paid to ${tx.to || tx.account} `);
-      // Default cat
-      setEditCategoryId(repo.current.getCategoryByName('Other')?.id || '');
-      setExistingExpenseId(null); // We would need to fetch the ID to update properly.
-      // Wait, updateExpense needs ID. We MUST find the ID.
-      // We can find it by doing a query. 
-      // Quick fix for V1: Delete and Re-Add on Save? Clunky.
-      // Correct fix: query expenses by txId.
-      // I will assume for now we just show the parsed data.
-    } else {
-      setEditDescription(tx.raw_text); // Or just empty
-      setEditCategoryId('');
-      setExistingExpenseId(null);
-    }
-
+    // If synced, maybe load existing description/category?
+    // For now, just show modal.
     setDetailModalVisible(true);
   };
 
-  // --- Render Helpers ---
+  const handleToggleBusiness = async (item: MpesaTransaction) => {
+    if (syncedTxIds.has(item.tx_id)) {
+      // If already synced, maybe we want to un-sync? (Delete)
+      // For now, assume toggle off = delete?
+      // User requested "Select All" -> Import.
+      // Usually toggle means On/Off.
+      // Let's implement Delete for completeness if safe.
+      Alert.alert("Actions", "Transaction already imported. Delete?", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete", style: 'destructive', onPress: async () => {
+            await repo.current.deleteByTransactionId(item.tx_id);
+            const next = new Set(syncedTxIds);
+            next.delete(item.tx_id);
+            setSyncedTxIds(next);
+          }
+        }
+      ]);
+      return;
+    }
+
+    // Import
+    try {
+      const descriptionToParse = `${item.from} ${item.to} ${item.type} `;
+      const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
+      const categoryId = categorySuggestion?.id || repo.current.getCategoryByName('Other')?.id || 'unknown_cat';
+
+      const cleanDesc = item.direction === 'in'
+        ? `Received from ${item.from} `
+        : `Paid to ${item.to || item.account || 'Unknown'} `;
+
+      const isInternal = item.type === 'internal' || item.direction === 'internal';
+
+      await repo.current.addExpense({
+        amount: item.amount,
+        date: parseMpesaDate(item.date, item.time),
+        description: cleanDesc,
+        categoryId: categoryId,
+        source: 'mpesa',
+        rawText: item.raw_text,
+        transactionId: item.tx_id,
+        excludeFromAnalytics: false // User wants internal transfers INCLUDED
+      });
+
+      // Update Set
+      const next = new Set(syncedTxIds);
+      next.add(item.tx_id);
+      setSyncedTxIds(next);
+
+      // If it was ignored, unignore
+      if (ignoredTxIds.has(item.tx_id)) {
+        await repo.current.unIgnoreTransaction(item.tx_id);
+        const nextIgnored = new Set(ignoredTxIds);
+        nextIgnored.delete(item.tx_id);
+        setIgnoredTxIds(nextIgnored);
+      }
+
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "Failed to import.");
+    }
+  };
 
   const renderItem = ({ item }: { item: MpesaTransaction }) => {
     const isSynced = syncedTxIds.has(item.tx_id);
     const isIgnored = ignoredTxIds.has(item.tx_id);
-    const isIncome = item.direction === 'in';
+
+    // M-Pesa Centric Direction Logic
+    let isIncome = item.direction === 'in';
+    let displayParty = isIncome ? item.from : (item.to || item.account || "Unknown");
+
+    if (item.type === 'internal' || item.direction === 'internal') {
+      // Internal Transfer Logic:
+      // M-PESA is the center.
+      if (item.from?.toUpperCase() === 'M-PESA') {
+        // Moving FROM M-Pesa -> Other (e.g. Pochi)
+        isIncome = false; // Outgoing
+        displayParty = item.to || 'Internal Account';
+      } else {
+        // Moving TO M-Pesa (from Pochi/Mshwari)
+        isIncome = true; // Incoming
+        displayParty = item.from || 'Internal Account';
+      }
+    }
 
     return (
       <TouchableOpacity
@@ -259,7 +352,7 @@ export default function SMSReaderScreen() {
           {/* Content */}
           <View style={{ flex: 1, marginRight: 10 }}>
             <Text style={styles.party} numberOfLines={1}>
-              {isIncome ? item.from : (item.to || item.account || "Unknown")}
+              {displayParty}
             </Text>
             <View style={styles.rowMeta}>
               <Text style={styles.date}>{item.date} • {item.time}</Text>
@@ -290,14 +383,26 @@ export default function SMSReaderScreen() {
     );
   };
 
+  // Render Header Update
+  // ...
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Imports</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Imports</Text>
+          <Text style={{ fontSize: 12, color: '#666' }}>{transactions.length} messages found</Text>
+        </View>
+        <TouchableOpacity
+          style={[styles.checkbox, { width: 'auto', paddingHorizontal: 10, borderColor: '#2196F3', borderWidth: 1 }]}
+          onPress={handleSelectAll}
+        >
+          <Text style={{ color: '#2196F3', fontWeight: 'bold' }}>Import All</Text>
+        </TouchableOpacity>
       </View>
 
       <FlatList
+        // ... same ...
         data={transactions}
         keyExtractor={(item) => item.tx_id}
         renderItem={renderItem}
@@ -459,7 +564,7 @@ export default function SMSReaderScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F2F4F7' },
-  header: { padding: 16, backgroundColor: 'white', alignItems: 'center', borderBottomWidth: 1, borderColor: '#eee' },
+  header: { padding: 16, backgroundColor: 'white', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#eee' },
   title: { fontSize: 18, fontWeight: '700', color: '#111' },
   listContent: { padding: 16 },
 

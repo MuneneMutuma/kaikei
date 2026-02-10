@@ -9,34 +9,49 @@ const ModelDownloadScreen = () => {
     const [isReady, setIsReady] = useState(false);
 
     useEffect(() => {
+        // Check if we can recover a background download
+        ModelManager.resumeDownloadIfActive();
+
         checkStatus();
+
+        // Subscribe to background download progress
+        const unsubscribe = ModelManager.addListener((state) => {
+            setIsDownloading(state.isDownloading);
+            setProgress(state.progress);
+            if (state.isDownloading) {
+                setStatus(`Downloading... ${(state.progress * 100).toFixed(0)}%`);
+            } else if (state.progress >= 1) {
+                setStatus('Download Complete! Verifying...');
+                checkStatus(); // Re-verify file
+            }
+        });
+
+        return () => unsubscribe();
     }, []);
 
     const checkStatus = async () => {
         const ready = await ModelManager.isModelReady();
         setIsReady(ready);
-        setStatus(ready ? 'Model Ready ✅' : 'Model Missing ❌');
-        setProgress(ready ? 1 : 0);
+        if (!isDownloading && ready) {
+            setStatus('Model Ready ✅');
+            setProgress(1);
+        } else if (!isDownloading && !ready) {
+            setStatus('Model Missing ❌');
+        }
     };
 
     const handleDownload = async () => {
-        setIsDownloading(true);
-        setStatus('Downloading... (This may take a while)');
+        if (isDownloading) return;
         try {
-            await ModelManager.downloadModel((p) => {
-                setProgress(p);
-                // Update status text every 10% or so to reduce renders if needed, 
-                // but React handles this mostly fine.
-                setStatus(`Downloading... ${(p * 100).toFixed(0)}%`);
-            });
-            setStatus('Download Complete! Verifying...');
-            await checkStatus();
+            await ModelManager.downloadModel();
+            // Alert is handled by effect when complete? 
+            // Or we can await here too, but listener handles UI.
+            // await ModelManager.downloadModel() returns when done.
             Alert.alert("Success", "AI Brain installed successfully!");
         } catch (e: any) {
+            // Error state handled by catch
             setStatus(`Error: ${e.message}`);
             Alert.alert("Download Failed", e.message);
-        } finally {
-            setIsDownloading(false);
         }
     };
 
@@ -64,7 +79,7 @@ const ModelDownloadScreen = () => {
 
             <View style={styles.card}>
                 <Text style={styles.info}>
-                    To categorize expenses automatically, we need to download a smart model (Llama 3.2).
+                    To categorize expenses automatically, we need to download a smart model (Qwen 2.5 0.5B).
                 </Text>
                 <Text style={styles.spec}>Size: ~{(MODEL_CONFIG.size / 1024 / 1024).toFixed(0)} MB</Text>
 
@@ -87,9 +102,26 @@ const ModelDownloadScreen = () => {
                 )}
 
                 {isReady && (
-                    <TouchableOpacity style={[styles.button, styles.deleteButton]} onPress={handleDelete}>
-                        <Text style={styles.buttonText}>🗑️ Delete Model</Text>
-                    </TouchableOpacity>
+                    <>
+                        <TouchableOpacity style={[styles.button, styles.testButton]} onPress={async () => {
+                            try {
+                                setStatus("Testing Model Load...");
+                                const { LlmClient } = require('../services/llm/LlmClient');
+                                await LlmClient.getInstance().init();
+                                Alert.alert("Success", "Model loaded successfully!");
+                                setStatus("Model Loaded OK ✅");
+                            } catch (e: any) {
+                                Alert.alert("Load Failed", e.message);
+                                setStatus(`Load Error: ${e.message}`);
+                            }
+                        }}>
+                            <Text style={styles.buttonText}>🧪 Test Load</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={[styles.button, styles.deleteButton]} onPress={handleDelete}>
+                            <Text style={styles.buttonText}>🗑️ Delete Model</Text>
+                        </TouchableOpacity>
+                    </>
                 )}
 
                 {isDownloading && (
@@ -171,6 +203,10 @@ const styles = StyleSheet.create({
     },
     deleteButton: {
         backgroundColor: '#e53935',
+        marginTop: 10,
+    },
+    testButton: {
+        backgroundColor: '#4CAF50',
     },
     disabled: {
         backgroundColor: '#ccc',

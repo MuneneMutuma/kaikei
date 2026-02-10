@@ -9,6 +9,8 @@ import HomeScreen from './src/screens/HomeScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
 import ModelDownloadScreen from './src/screens/ModelDownloadScreen';
+import AnalyticsScreen from './src/screens/AnalyticsScreen';
+import AdviceScreen from './src/screens/AdviceScreen';
 import { Database } from './src/services/ledger/Database';
 
 export type RootStackParamList = {
@@ -17,6 +19,8 @@ export type RootStackParamList = {
   AddExpense: undefined;
   SmsReader: undefined;
   ModelDownload: undefined;
+  Analytics: undefined;
+  Advice: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -86,6 +90,17 @@ const App = () => {
             name="ModelDownload"
             component={ModelDownloadScreen}
             options={{ title: 'AI Settings' }}
+          />
+
+          <Stack.Screen
+            name="Analytics"
+            component={AnalyticsScreen}
+            options={{ title: 'Financial Health' }}
+          />
+          <Stack.Screen
+            name="Advice"
+            component={AdviceScreen}
+            options={{ title: 'AI Assistant' }}
           />
         </Stack.Navigator>
       </NavigationContainer>

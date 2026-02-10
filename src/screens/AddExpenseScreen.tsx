@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 
 
 import AmountStep from "./AmountStep";
@@ -20,11 +20,18 @@ import VoiceInput from "./VoiceInput";
 type Category = { id: string; name: string; color: string };
 type Expense = { id: string; amount: number; category: string; note?: string; date: string };
 
+import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+
 const AddExpenseScreen: React.FC = () => {
   const navigation = useNavigation();
+  const route = useRoute<any>(); // Get route
   const insets = useSafeAreaInsets();
 
-  const [mode, setMode] = useState<"voice" | "form">("form");
+  // Repo instance (ref for stability across renders if needed, but simple constant also works in RN functional component if defined outside or via useRef)
+  // safe to use lazy init
+  const [repo] = useState(() => new ExpenseRepository());
+
+  const [mode, setMode] = useState<"voice" | "form">(route.params?.initialMode || "form");
   const [step, setStep] = useState<number>(1);
   const [amount, setAmount] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
@@ -39,24 +46,53 @@ const AddExpenseScreen: React.FC = () => {
     setStep(1);
   };
 
-  const saveExpense = (payload?: Partial<Expense>) => {
-    // Build canonical expense object
-    const expense: Expense = {
-      id: Date.now().toString(),
-      amount: payload?.amount ?? parseFloat(amount || "0"),
-      category: payload?.category ?? selectedCategory?.name ?? "Other",
-      note: payload?.note ?? note.trim(),
-      date: new Date().toISOString(),
-    };
+  const saveExpense = async (payload?: Partial<Expense>) => {
+    try {
+      const finalAmount = payload?.amount ?? parseFloat(amount || "0");
+      const finalCategory = payload?.category ?? selectedCategory?.name ?? "Other";
+      const finalNote = payload?.note ?? note.trim();
+      const date = new Date().toISOString();
 
-    // TODO: persist locally (MMKV / SQLite / AsyncStorage) and/or send to analyzer
-    console.log("Saved expense:", expense);
+      // Get Category ID if possible (Assuming name matching or default 'other')
+      const catObj = repo.getCategoryByName(finalCategory);
+      const catId = catObj ? catObj.id : 'other'; // Simplified fallback
 
-    // show ephemeral hint
-    setHint("Expense logged");
-    setTimeout(() => setHint(null), 2200);
+      await repo.addExpense({
+        amount: finalAmount,
+        date: date, // Fix: Pass the date!
+        category: finalCategory, // Note: Schema expects categoryId, addExpense takes Payload. 
+        // Wait, ExpenseRepository.addExpense expects { amount, date, description, categoryId, source, rawText }
+        // My previous view of ExpenseRepository showed it takes Omit<Expense, 'id'...> 
+        // and Schema Expense has categoryId. 
+        // Verify ExpenseRepository signature from memory/view.
+        // It takes: { amount, date, description, categoryId, source, rawText }
+        description: finalNote,
+        categoryId: catId,
+        source: mode === 'voice' ? 'voice' : 'manual',
+        rawText: ''
+      });
 
-    resetForm();
+      console.log("Saved expense to DB");
+
+      // show ephemeral hint
+      setHint("Expense logged");
+      setTimeout(() => {
+        setHint(null);
+        if (payload) {
+          // If it came from voice/payload, likely want to close or reset? 
+          // Navigation back to home seems appropriate for "Done"
+          navigation.goBack();
+        } else {
+          // Manual flow, maybe add another?
+          navigation.goBack();
+        }
+      }, 1200);
+
+      resetForm();
+    } catch (e) {
+      console.error("Failed to save", e);
+      setHint("Error saving expense");
+    }
   };
 
   const nextStep = () => {
