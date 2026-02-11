@@ -17,10 +17,9 @@ export interface Expense {
     transactionId?: string;
     isVerified: boolean;
     synced: boolean;
-    synced: boolean;
     categoryName?: string; // Optional join field
     excludeFromAnalytics?: boolean;
-    type: 'income' | 'expense';
+    type: 'income' | 'expense' | 'transfer';
     sender?: string;
     recipient?: string;
 }

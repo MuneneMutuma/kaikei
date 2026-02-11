@@ -59,6 +59,7 @@ export class ExpenseRepository {
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE e.date LIKE ? 
+           AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
             ORDER BY e.date DESC`,
             [`${monthStr}%`]
         );

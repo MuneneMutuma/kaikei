@@ -21,6 +21,8 @@ type Category = { id: string; name: string; color: string };
 type Expense = { id: string; amount: number; category: string; note?: string; date: string };
 
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
 
 const AddExpenseScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -60,7 +62,7 @@ const AddExpenseScreen: React.FC = () => {
       await repo.addExpense({
         amount: finalAmount,
         date: date, // Fix: Pass the date!
-        category: finalCategory, // Note: Schema expects categoryId, addExpense takes Payload. 
+
         // Wait, ExpenseRepository.addExpense expects { amount, date, description, categoryId, source, rawText }
         // My previous view of ExpenseRepository showed it takes Omit<Expense, 'id'...> 
         // and Schema Expense has categoryId. 
@@ -201,25 +203,25 @@ const AddExpenseScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F6F7F9", paddingHorizontal: 16 },
+  container: { flex: 1, backgroundColor: colors.background, paddingHorizontal: 16 },
   headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
   backBtn: { padding: 8 },
-  backText: { fontSize: 20, color: "#222" },
-  title: { flex: 1, fontSize: 22, fontWeight: "700", color: "#222", textAlign: "center" },
+  backText: { fontSize: 20, color: colors.text },
+  title: { ...typography.header, flex: 1, fontSize: 22, color: colors.text, textAlign: "center" },
   modeToggle: { flexDirection: "row", borderRadius: 8, overflow: "hidden" },
-  modeButton: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: "#EEE" },
-  modeActive: { backgroundColor: "#3F51B5" },
-  modeText: { color: "#333", fontWeight: "600" },
-  modeTextActive: { color: "#FFF" },
+  modeButton: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: colors.surface },
+  modeActive: { backgroundColor: colors.primary },
+  modeText: { color: colors.text, fontWeight: "600" },
+  modeTextActive: { color: "white" },
 
   navContainer: { flexDirection: "row", marginTop: 12, marginBottom: 8 },
-  navAlt: { flex: 1, backgroundColor: "#E8E8E8", padding: 14, borderRadius: 10, marginRight: 8, alignItems: "center" },
-  navAltText: { color: "#222", fontSize: 16, fontWeight: "600" },
+  navAlt: { flex: 1, backgroundColor: colors.surface, padding: 14, borderRadius: 10, marginRight: 8, alignItems: "center" },
+  navAltText: { color: colors.text, fontSize: 16, fontWeight: "600" },
   navAltPlaceholder: { flex: 1, marginRight: 8 },
 
-  navPrimary: { flex: 1, backgroundColor: "#3F51B5", padding: 14, borderRadius: 10, alignItems: "center" },
-  navPrimaryText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
-  navDisabled: { opacity: 0.6 },
+  navPrimary: { flex: 1, backgroundColor: colors.primary, padding: 14, borderRadius: 10, alignItems: "center" },
+  navPrimaryText: { color: "white", fontSize: 16, fontWeight: "700" },
+  navDisabled: { opacity: 0.6, backgroundColor: colors.textSecondary },
 
   hintBox: {
     position: "absolute",

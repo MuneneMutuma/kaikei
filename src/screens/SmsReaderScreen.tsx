@@ -20,6 +20,8 @@ import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
 import { Database } from "../services/ledger/Database";
 import { Category, Expense } from "../services/ledger/Schema";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
 
 const parseMpesaDate = (dateStr: string, timeStr?: string): string => {
   try {
@@ -195,14 +197,23 @@ export default function SMSReaderScreen() {
         // NEW: Check internal
         const isInternal = tx.type === 'internal' || tx.direction === 'internal';
 
-        // Determine Type (Income/Expense)
-        let type: 'income' | 'expense' = 'expense';
-        if (tx.direction === 'in') {
+        // Determine Type (Income/Expense/Transfer)
+        let type: 'income' | 'expense' | 'transfer' = 'expense';
+        if (isInternal) {
+          type = 'transfer';
+        } else if (tx.direction === 'in') {
           type = 'income';
-        } else if (isInternal) {
-          // M-PESA Centric
-          if (tx.from?.toUpperCase() === 'M-PESA') type = 'expense';
-          else type = 'income';
+        } else if (tx.type === 'transfer') {
+          type = 'transfer';
+        }
+
+        // Handle Transfer specifics
+        if (type === 'transfer') {
+          // If manual transfer, check sender/recip
+          if (tx.from?.toUpperCase() === 'M-PESA') {
+            // Outgoing transfer (M-Pesa -> Pochi)
+            // Keeping it as 'transfer' essentially hides it from Expense/Income totals
+          }
         }
 
         // Determine Sender / Recipient
@@ -293,7 +304,8 @@ export default function SMSReaderScreen() {
         source: 'mpesa',
         rawText: item.raw_text,
         transactionId: item.tx_id,
-        excludeFromAnalytics: isInternal // Prevent double counting for internal moves
+        excludeFromAnalytics: isInternal, // Prevent double counting for internal moves
+        type: type // Explicitly set type
       });
 
       // Update Set
@@ -323,17 +335,17 @@ export default function SMSReaderScreen() {
     let isIncome = item.direction === 'in';
     let displayParty = isIncome ? item.from : (item.to || item.account || "Unknown");
 
-    if (item.type === 'internal' || item.direction === 'internal') {
+    if (item.type === 'internal' || item.direction === 'internal' || item.type === 'transfer') {
       // Internal Transfer Logic:
       // M-PESA is the center.
       if (item.from?.toUpperCase() === 'M-PESA') {
         // Moving FROM M-Pesa -> Other (e.g. Pochi)
-        isIncome = false; // Outgoing
-        displayParty = item.to || 'Internal Account';
+        isIncome = false; // Outgoing visual
+        displayParty = `Transfer to ${item.to || 'Internal Account'}`;
       } else {
         // Moving TO M-Pesa (from Pochi/Mshwari)
-        isIncome = true; // Incoming
-        displayParty = item.from || 'Internal Account';
+        isIncome = true; // Incoming visual
+        displayParty = `Transfer from ${item.from || 'Internal Account'}`;
       }
     }
 
@@ -394,10 +406,10 @@ export default function SMSReaderScreen() {
           <Text style={{ fontSize: 12, color: '#666' }}>{transactions.length} messages found</Text>
         </View>
         <TouchableOpacity
-          style={[styles.checkbox, { width: 'auto', paddingHorizontal: 10, borderColor: '#2196F3', borderWidth: 1 }]}
+          style={[styles.checkbox, { width: 'auto', paddingHorizontal: 10, borderColor: colors.primary, borderWidth: 1 }]}
           onPress={handleSelectAll}
         >
-          <Text style={{ color: '#2196F3', fontWeight: 'bold' }}>Import All</Text>
+          <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Import All</Text>
         </TouchableOpacity>
       </View>
 
@@ -563,60 +575,61 @@ export default function SMSReaderScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F4F7' },
-  header: { padding: 16, backgroundColor: 'white', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#eee' },
-  title: { fontSize: 18, fontWeight: '700', color: '#111' },
+  container: { flex: 1, backgroundColor: colors.background },
+  header: { padding: 16, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: colors.border },
+  title: { ...typography.header, fontSize: 18, color: colors.text },
   listContent: { padding: 16 },
 
-  card: { backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
-  cardIgnored: { opacity: 0.7, backgroundColor: '#F9FAFB' },
+  card: { backgroundColor: colors.surface, borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: colors.primary, shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
+  cardIgnored: { opacity: 0.7, backgroundColor: colors.background },
   cardHeader: { flexDirection: 'row', alignItems: 'center' }, // Removed marginBottom to keep it tight
-  iconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0F2F5', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  icon: { fontSize: 18 },
-  party: { fontSize: 15, fontWeight: '600', color: '#333', marginBottom: 2 },
+  iconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  icon: { fontSize: 18, color: colors.text },
+  party: { ...typography.body, fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 2 },
   rowMeta: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  date: { fontSize: 12, color: '#888' },
-  amount: { fontSize: 15, fontWeight: 'bold', marginTop: 2 },
-  textGreen: { color: '#4CAF50' },
-  textBlack: { color: '#333' },
+  date: { ...typography.caption, fontSize: 12, color: colors.textSecondary },
+  amount: { ...typography.mono, fontSize: 15, fontWeight: 'bold', marginTop: 2 },
+  textGreen: { color: colors.success },
+  textBlack: { color: colors.text },
 
   // Toggle Checkbox
   checkbox: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
-  checkboxChecked: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
+  checkboxChecked: { backgroundColor: colors.primary, borderColor: colors.primary },
   checkboxUnchecked: { backgroundColor: 'transparent', borderColor: '#ccc' },
   checkboxIcon: { color: 'white', fontWeight: 'bold', fontSize: 14 },
 
-  miniStatus: { fontSize: 10, color: '#4CAF50', fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
-  miniStatusPersonal: { fontSize: 10, color: '#999', fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
+  miniStatus: { fontSize: 10, color: colors.primary, fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
+  miniStatusPersonal: { fontSize: 10, color: colors.textSecondary, fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
 
   // Drawer
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  drawerContainer: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, width: '100%', paddingBottom: 40, maxHeight: '90%' },
+  drawerContainer: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, width: '100%', paddingBottom: 40, maxHeight: '90%' },
   drawerHandle: { width: 40, height: 5, backgroundColor: '#ddd', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
-  drawerTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 10, color: '#888', textAlign: 'center', textTransform: 'uppercase' },
+  drawerTitle: { ...typography.subHeader, fontSize: 16, marginBottom: 10, color: colors.textSecondary, textAlign: 'center', textTransform: 'uppercase' },
 
-  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20, backgroundColor: '#f9f9f9', padding: 15, borderRadius: 12 },
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20, backgroundColor: colors.background, padding: 15, borderRadius: 12 },
   detailItem: { width: '48%', marginBottom: 12 },
-  detailLabel: { color: '#888', fontSize: 11, marginBottom: 2 },
-  detailValue: { fontWeight: '600', color: '#333', fontSize: 13 },
+  detailLabel: { color: colors.textSecondary, fontSize: 11, marginBottom: 2 },
+  detailValue: { fontWeight: '600', color: colors.text, fontSize: 13 },
 
-  balanceContainer: { backgroundColor: '#E0F2F1', padding: 15, borderRadius: 12, marginBottom: 20 },
-  balanceTitle: { fontSize: 12, fontWeight: 'bold', color: '#00695C', marginBottom: 8, textTransform: 'uppercase' },
-  balanceLabel: { color: '#004D40', fontSize: 14 },
-  balanceValue: { fontWeight: 'bold', color: '#004D40', fontSize: 14 },
+  balanceContainer: { backgroundColor: colors.primary + '1A', padding: 15, borderRadius: 12, marginBottom: 20 }, // 10% opacity
+  balanceTitle: { fontSize: 12, fontWeight: 'bold', color: colors.primary, marginBottom: 8, textTransform: 'uppercase' },
+  balanceLabel: { color: colors.text, fontSize: 14, opacity: 0.8 },
+  balanceValue: { fontWeight: 'bold', color: colors.text, fontSize: 14 },
 
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
   drawerActions: { marginTop: 10, alignItems: 'center' },
 
-  divider: { height: 1, backgroundColor: '#eee', marginVertical: 20 },
-  sectionHeader: { fontSize: 16, fontWeight: '700', marginBottom: 15 },
-  inputLabel: { fontSize: 12, color: '#666', marginBottom: 5, marginTop: 10 },
-  input: { backgroundColor: '#f9f9f9', padding: 12, borderRadius: 8, color: '#333', borderWidth: 1, borderColor: '#eee' },
+  divider: { height: 1, backgroundColor: colors.border, marginVertical: 20 },
+  sectionHeader: { ...typography.subHeader, fontSize: 16, marginBottom: 15, color: colors.text },
+  inputLabel: { fontSize: 12, color: colors.textSecondary, marginBottom: 5, marginTop: 10 },
+  input: { backgroundColor: colors.background, padding: 12, borderRadius: 8, color: colors.text, borderWidth: 1, borderColor: colors.border },
 
-  saveBtn: { backgroundColor: '#2196F3', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
+  saveBtn: { backgroundColor: colors.primary, padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
   saveBtnText: { color: 'white', fontWeight: 'bold' },
 
-  catItem: { padding: 15, borderBottomWidth: 1, borderColor: '#f0f0f0' },
-  catText: { fontSize: 16 },
+  catItem: { padding: 15, borderBottomWidth: 1, borderColor: colors.border },
+  catText: { fontSize: 16, color: colors.text },
   closeBtn: { padding: 15, alignItems: 'center', marginTop: 10 },
   emptyContainer: { alignItems: 'center', marginTop: 80 },
 });

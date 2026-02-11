@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, Activ
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart, PieChart } from "react-native-gifted-charts";
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
+import { colors } from '../theme/colors';
+import { typography } from '../theme/typography';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -144,7 +146,7 @@ export default function AnalyticsScreen() {
             </View>
 
             {loading ? (
-                <ActivityIndicator size="large" color="#2196F3" style={{ marginTop: 50 }} />
+                <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 50 }} />
             ) : (
                 <View>
                     {/* Hero Card */}
@@ -194,11 +196,11 @@ export default function AnalyticsScreen() {
                             {trendData.length > 0 ? (
                                 <LineChart
                                     data={trendData}
-                                    color={'#2196F3'}
+                                    color={colors.primary}
                                     thickness={3}
-                                    dataPointsColor={'#2196F3'}
-                                    startFillColor={'rgba(33, 150, 243, 0.3)'}
-                                    endFillColor={'rgba(33, 150, 243, 0.01)'}
+                                    dataPointsColor={colors.primary}
+                                    startFillColor={colors.primary + '4D'} // 30% opacity
+                                    endFillColor={colors.primary + '03'}
                                     startOpacity={0.9}
                                     endOpacity={0.2}
                                     initialSpacing={10}
@@ -226,90 +228,92 @@ export default function AnalyticsScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#F5F7FA',
+        backgroundColor: colors.background,
     },
     header: {
         padding: 20,
-        backgroundColor: '#fff',
+        backgroundColor: colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#eee'
+        borderBottomColor: colors.border
     },
     title: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        color: '#333',
+        ...typography.header,
+        color: colors.text,
         marginBottom: 15
     },
     tabContainer: {
         flexDirection: 'row',
-        backgroundColor: '#F0F0F0',
-        borderRadius: 10,
+        backgroundColor: colors.background,
+        borderRadius: 12,
         padding: 4,
     },
     tab: {
         flex: 1,
         paddingVertical: 8,
         alignItems: 'center',
-        borderRadius: 8,
+        borderRadius: 10,
     },
     activeTab: {
-        backgroundColor: '#fff',
+        backgroundColor: colors.surface,
         elevation: 2,
-        shadowColor: '#000',
+        shadowColor: 'black',
         shadowOpacity: 0.1,
-        shadowRadius: 2
+        shadowRadius: 4
     },
     tabText: {
+        ...typography.caption,
         fontWeight: '500',
-        color: '#666'
+        color: colors.textSecondary
     },
     activeTabText: {
-        color: '#2196F3',
+        color: colors.primary,
         fontWeight: 'bold'
     },
     heroCard: {
         margin: 20,
         padding: 24,
-        backgroundColor: '#2196F3',
-        borderRadius: 20,
-        elevation: 4,
-        shadowColor: '#2196F3',
+        backgroundColor: colors.primary,
+        borderRadius: 24,
+        elevation: 8,
+        shadowColor: colors.primary,
         shadowOpacity: 0.3,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 4 }
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 }
     },
     heroLabel: {
         color: 'rgba(255,255,255,0.8)',
         fontSize: 14,
         fontWeight: '600',
-        marginBottom: 5
+        marginBottom: 5,
+        textTransform: 'uppercase',
+        letterSpacing: 1
     },
     heroAmount: {
-        color: '#fff',
+        color: 'white',
         fontSize: 36,
-        fontWeight: 'bold',
-        marginBottom: 10
+        fontWeight: '800', // Heavy bold
+        marginBottom: 10,
+        fontFamily: typography.mono.fontFamily,
     },
     heroSubText: {
         color: 'rgba(255,255,255,0.9)',
         fontSize: 14,
     },
     chartCard: {
-        backgroundColor: '#fff',
+        backgroundColor: colors.surface,
         marginHorizontal: 20,
         marginBottom: 20,
-        borderRadius: 16,
+        borderRadius: 24,
         padding: 20,
         elevation: 2,
-        shadowColor: '#000',
+        shadowColor: colors.primary,
         shadowOpacity: 0.05,
-        shadowRadius: 5
+        shadowRadius: 10
     },
     chartTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#333',
-        marginBottom: 15
+        ...typography.subHeader,
+        color: colors.text,
+        marginBottom: 20
     },
     legendContainer: {
         flexDirection: 'row',
@@ -330,7 +334,8 @@ const styles = StyleSheet.create({
         marginRight: 6
     },
     legendText: {
-        color: '#555',
-        fontSize: 12
+        color: colors.textSecondary,
+        fontSize: 12,
+        fontWeight: '500'
     }
 });

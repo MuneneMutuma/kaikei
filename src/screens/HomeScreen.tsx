@@ -1,17 +1,19 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  RefreshControl, Alert, ActivityIndicator, Image, Modal,
-  InteractionManager, TextInput
+  View, Text, StyleSheet, SectionList, TouchableOpacity,
+  RefreshControl, Alert, Modal, InteractionManager, TextInput
 } from 'react-native';
+import { View as MotiView } from 'moti';
+
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { Expense, Category } from "../services/ledger/Schema";
 import { useFocusEffect } from '@react-navigation/native';
-import SummaryCard from "../components/SummaryCard";
-import CategoryBreakdown from "../components/CategoryBreakdown";
 import { AutoClassifier } from '../services/intelligence/AutoClassifier';
 import { SmartSuggestionCard } from "../components/SmartSuggestionCard";
 import { SmartOnboardingService, PayeeCandidate } from "../services/intelligence/SmartOnboardingService";
+import HomeHeader from "../components/HomeHeader";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
 
 const getCategoryIcon = (name: string) => {
   switch (name?.toLowerCase()) {
@@ -25,32 +27,26 @@ const getCategoryIcon = (name: string) => {
   }
 };
 
-const getCategoryColor = (name: string) => {
-  switch (name?.toLowerCase()) {
-    case 'food': return '#FF9800';
-    case 'transport': return '#2196F3';
-    case 'shopping': return '#E91E63';
-    case 'entertainment': return '#9C27B0';
-    case 'bills': return '#F44336';
-    default: return '#607D8B';
-  }
-};
+interface SectionData {
+  title: string;
+  data: Expense[];
+}
 
-export default function HomeScreen({ navigation }: any) {
-  // 1. State Declarations (Must be first)
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+export default function HomeScreen({ route, navigation }: any) {
+  // 1. Params & State
+  const { name: userName = "User" } = route.params || {};
+
+  const [sections, setSections] = useState<SectionData[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalSpent, setTotalSpent] = useState(0);
   const [totalIncome, setTotalIncome] = useState(0);
-  const [topCategory, setTopCategory] = useState<{ name: string, amount: number, percent: number } | undefined>(undefined);
-  const [breakdownData, setBreakdownData] = useState<any[]>([]);
 
   // Smart Onboarding State
   const [suggestion, setSuggestion] = useState<PayeeCandidate | null>(null);
   const [isUpdatingSuggestion, setIsUpdatingSuggestion] = useState(false);
   const onboardingService = React.useMemo(() => new SmartOnboardingService(), []);
 
-  // Classifier State (Moved up)
+  // Classifier State
   const [classifierStatus, setClassifierStatus] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -63,23 +59,18 @@ export default function HomeScreen({ navigation }: any) {
   const [categoryModalVisible, setCategoryModalVisible] = useState(false);
 
   // 2. Memos
-  /* Use useMemo for repo to avoid re-instantiation */
   const repo = React.useMemo(() => new ExpenseRepository(), []);
 
-  // 3. Handlers (must be defined before being used in Effects or Callbacks)
   // 3. Handlers
   const fetchData = useCallback(async () => {
     setLoading(true);
 
     try {
-      // 1. Critical Data (Load Immediately)
-      // Default to current month for Home Screen
       const now = new Date();
       const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const allExpenses = await repo.getExpensesByMonth(monthStr);
-      setExpenses(allExpenses);
 
-      // Calculate Summary Live
+      // Calculate Totals
       const spent = allExpenses
         .filter(e => e.type === 'expense' && !e.excludeFromAnalytics)
         .reduce((sum, e) => sum + e.amount, 0);
@@ -91,51 +82,48 @@ export default function HomeScreen({ navigation }: any) {
       setTotalSpent(spent);
       setTotalIncome(income);
 
-      // Simple category breakdown for the month
-      // You might want to move this to a repo method if it gets too heavy, 
-      // but for < 1000 items JS reduce is faster than SQL bridge overhead often.
-      const catMap = new Map<string, number>();
-      allExpenses.filter(e => e.type === 'expense' && !e.excludeFromAnalytics).forEach(e => {
-        const cat = e.categoryName || 'Uncategorized';
-        catMap.set(cat, (catMap.get(cat) || 0) + e.amount);
-      });
+      // Group by Date for SectionList
+      const grouped = allExpenses.reduce((acc, expense) => {
+        const dateKey = new Date(expense.date).toLocaleDateString(); // Simple grouping
+        if (!acc[dateKey]) acc[dateKey] = [];
+        acc[dateKey].push(expense);
+        return acc;
+      }, {} as Record<string, Expense[]>);
 
-      const breakdown = Array.from(catMap.entries())
-        .map(([name, amount]) => ({
-          name,
-          amount,
-          percentage: (amount / spent) * 100,
-          color: getCategoryColor(name),
-          icon: getCategoryIcon(name)
-        }))
-        .sort((a, b) => b.amount - a.amount);
+      // Sort Sections by Date (Desc)
+      const sortedSections: SectionData[] = Object.keys(grouped)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+        .map(date => {
+          // Friendly Labels
+          const d = new Date(date);
+          const today = new Date();
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
 
-      setBreakdownData(breakdown);
-      if (breakdown.length > 0) {
-        setTopCategory({ name: breakdown[0].name, amount: breakdown[0].amount, percent: breakdown[0].percentage });
-      }
+          let title = date;
+          if (d.toDateString() === today.toDateString()) title = "Today";
+          else if (d.toDateString() === yesterday.toDateString()) title = "Yesterday";
 
-      // Load Categories for Picker
-      const cats = await repo.getCategories();
+          return { title, data: grouped[date] };
+        });
+
+      setSections(sortedSections);
+
+      // Load Categories
+      const cats = await repo.getAllCategories();
       setCategories(cats);
 
     } catch (e) {
       console.error("Failed to load home data", e);
     }
 
-    // 2. Run heavy background tasks AFTER the list is rendered (InteractionManager)
+    // Heavy Background Tasks
     InteractionManager.runAfterInteractions(async () => {
-      // Auto-fix internal transfers (Now optimized with index)
       await repo.scanAndFlagInternalTransfers();
-
-      // Check for Smart Suggestions (Onboarding) - Lazy Metadata
       try {
         const suggestions = await onboardingService.getTopPayees(1);
-        if (suggestions.length > 0) {
-          setSuggestion(suggestions[0]);
-        } else {
-          setSuggestion(null);
-        }
+        if (suggestions.length > 0) setSuggestion(suggestions[0]);
+        else setSuggestion(null);
       } catch (e) {
         console.log("Error fetching suggestion:", e);
       }
@@ -152,42 +140,18 @@ export default function HomeScreen({ navigation }: any) {
     setIsUpdatingSuggestion(true);
     try {
       const count = await onboardingService.labelPayee(suggestion.name, editCategoryId);
-      Alert.alert("Awesome! 🚀", `Categorized ${count} transactions for ${suggestion.name}.`);
-      setSuggestion(null); // Dismiss
-      setEditCategoryId(""); // Reset
-      setSuggestionTransactions([]); // Clear data
-      fetchData(); // Refresh UI
+      Alert.alert("Awesome! 🚀", `Categorized ${count} transactions.`);
+      setSuggestion(null);
+      setEditCategoryId("");
+      fetchData();
     } catch (e) {
-      Alert.alert("Error", "Failed to update transactions.");
+      Alert.alert("Error", "Failed to update.");
     } finally {
       setIsUpdatingSuggestion(false);
     }
   };
 
-  // Smart Suggestion Detail Modal Logic
-  const [suggestionModalVisible, setSuggestionModalVisible] = useState(false);
-  const handleOpenSuggestionDetails = () => {
-    if (!suggestion) return;
-    navigation.navigate('SmartSuggestion', { name: suggestion.name, count: suggestion.count });
-  };
-
-  const handleBatchCategorize = async (categoryId: string, selectedIds: string[]) => {
-    // We can use bulkUpdateCategory but restricted to IDs? 
-    // Repo's bulkUpdateCategory is by recipient name (ALL). 
-    // To support selection, we need a new repo method or iterate updates.
-    // Iterating is safer for now.
-    for (const id of selectedIds) {
-      await repo.updateExpense(id, { categoryId, isVerified: true });
-    }
-    Alert.alert("Success", `Categorized ${selectedIds.length} transactions.`);
-    fetchData();
-    // Check if any left for this recipient? If no, remove suggestion.
-    const remaining = await repo.getUncategorizedExpensesByRecipient(suggestion?.name || '');
-    if (remaining.length === 0) setSuggestion(null);
-  };
-
   const handleOpenDetails = useCallback((expense: Expense) => {
-    console.log("Opening details for:", expense.id);
     setSelectedExpense(expense);
     setEditDescription(expense.description);
     setEditCategoryId(expense.categoryId);
@@ -202,10 +166,9 @@ export default function HomeScreen({ navigation }: any) {
         categoryId: editCategoryId
       });
       setDetailModalVisible(false);
-      fetchData(); // Refresh UI
-      Alert.alert("Success", "Transaction updated.");
+      fetchData();
     } catch (e) {
-      Alert.alert("Error", "Failed to update transaction.");
+      Alert.alert("Error", "Update failed.");
     }
   }, [selectedExpense, editDescription, editCategoryId, repo, fetchData]);
 
@@ -214,31 +177,11 @@ export default function HomeScreen({ navigation }: any) {
     try {
       await repo.deleteExpense(selectedExpense.id);
       setDetailModalVisible(false);
-      fetchData(); // Refresh UI
-      Alert.alert("Success", "Transaction deleted.");
+      fetchData();
     } catch (e) {
-      Alert.alert("Error", "Failed to delete.");
+      Alert.alert("Error", "Delete failed.");
     }
   }, [selectedExpense, repo, fetchData]);
-
-  const handleReset = useCallback(() => {
-    Alert.alert(
-      "Reset All Data",
-      "Are you sure you want to delete ALL transactions? This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete All",
-          style: "destructive",
-          onPress: async () => {
-            await repo.clearAll();
-            fetchData();
-            Alert.alert("Success", "All data has been cleared.");
-          }
-        }
-      ]
-    );
-  }, [repo, fetchData]);
 
   // 4. Effects
   useFocusEffect(
@@ -248,201 +191,123 @@ export default function HomeScreen({ navigation }: any) {
   );
 
   useEffect(() => {
-    // Start Classifier
     const classifier = AutoClassifier.getInstance();
-    // setTimeout(() => classifier.start(), 2000); // Delay start slightly
-
     const unsub = classifier.addListener((status, processing) => {
       setClassifierStatus(status);
       setIsProcessing(processing);
     });
-
-    // Auto-start if we have a model
     classifier.start();
-
     return () => {
       classifier.stop();
       unsub();
     };
   }, []);
 
-  // 5. Render Callbacks
-  const renderItem = useCallback(({ item }: { item: Expense }) => {
+  // 5. Renderers
+  const renderItem = useCallback(({ item, index }: { item: Expense, index: number }) => {
     const isIncome = item.type === 'income';
-
     let displayName = item.description;
-    if (isIncome && item.sender && item.sender !== 'Unknown') {
-      displayName = item.sender;
-    } else if (!isIncome && item.recipient && item.recipient !== 'Unknown') {
-      displayName = item.recipient;
-    }
+    if (isIncome && item.sender && item.sender !== 'Unknown') displayName = item.sender;
+    else if (!isIncome && item.recipient && item.recipient !== 'Unknown') displayName = item.recipient;
 
     return (
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.7}
-        delayPressIn={0}
-        onPress={() => handleOpenDetails(item)}
+      <MotiView
+        from={{ opacity: 0, translateY: 20 }}
+        animate={{ opacity: 1, translateY: 0 }}
+        transition={{
+          type: 'timing',
+          duration: 350,
+          delay: index * 50 // Stagger by 50ms
+        }}
+        style={{ marginBottom: 8, marginHorizontal: 16 }}
       >
-        <View style={styles.iconContainer}>
-          <Text style={styles.icon}>{getCategoryIcon(item.categoryName || '')}</Text>
-        </View>
-        <View style={styles.cardContent}>
-          <View style={styles.row}>
-            <Text style={styles.description} numberOfLines={1}>{displayName}</Text>
-            <Text style={[styles.amount, isIncome ? { color: '#4CAF50' } : {}]}>
-              {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
-            </Text>
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.7}
+          onPress={() => handleOpenDetails(item)}
+        >
+          <View style={styles.iconContainer}>
+            <Text style={styles.icon}>{getCategoryIcon(item.categoryName || '')}</Text>
           </View>
-          <Text style={styles.date}>{new Date(item.date).toLocaleDateString()} • {item.categoryName || 'Uncategorized'}</Text>
-        </View>
-      </TouchableOpacity>
+          <View style={styles.cardContent}>
+            <View style={styles.row}>
+              <Text style={styles.description} numberOfLines={1}>{displayName}</Text>
+              <Text style={[styles.amount, isIncome ? { color: colors.success } : {}]}>
+                {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
+              </Text>
+            </View>
+            <Text style={styles.date}>{item.categoryName || 'Uncategorized'}</Text>
+          </View>
+        </TouchableOpacity>
+      </MotiView>
     );
-  }, [handleOpenDetails]); // Dep on repo? No, on handleOpenDetails. Assuming handleOpenDetails is stable? It uses state setters, so yes.
+  }, [handleOpenDetails]);
+
+  const renderSectionHeader = useCallback(({ section: { title } }: { section: SectionData }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+    </View>
+  ), []);
 
   const HeaderComponent = useCallback(() => (
     <View>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.welcome}>Karibu, User</Text>
-          <Text style={styles.personaBadge}>Personal Finance</Text>
-          {isProcessing && (
-            <Text style={{ fontSize: 10, color: '#2196F3', marginTop: 4 }}>🤖 {classifierStatus}</Text>
-          )}
-        </View>
-        <TouchableOpacity style={styles.profileButton} onPress={() => navigation.navigate("AddExpense", { initialMode: 'voice' })}>
-          <Text style={{ fontSize: 20 }}>🎙️</Text>
-        </TouchableOpacity>
-      </View>
+      <HomeHeader userName={userName} totalSpent={totalSpent} totalIncome={totalIncome} />
 
-      {/* Smart Suggestion Card */}
+      {/* Smart Suggestion - Just below Header */}
       {suggestion && (
-        <SmartSuggestionCard
-          payeeName={suggestion.name}
-          count={suggestion.count}
-          sampleTx={suggestion.sample}
-          isUpdating={isUpdatingSuggestion}
-          selectedCategoryName={categories.find(c => c.id === editCategoryId)?.name}
-          onSelectCategory={() => {
-            setEditCategoryId(""); // Ensure clear before opening
-            setCategoryModalVisible(true);
-          }}
-          onDismiss={() => setSuggestion(null)}
-          onConfirm={handleConfirmSuggestion}
-          onOpenDetails={handleOpenSuggestionDetails}
-        />
+        <View style={{ paddingHorizontal: 20, marginTop: -10, marginBottom: 10, zIndex: 10 }}>
+          <SmartSuggestionCard
+            payeeName={suggestion.name}
+            count={suggestion.count}
+            sampleTx={suggestion.sample}
+            isUpdating={isUpdatingSuggestion}
+            selectedCategoryName={categories.find(c => c.id === editCategoryId)?.name}
+            onSelectCategory={() => {
+              setEditCategoryId("");
+              setCategoryModalVisible(true);
+            }}
+            onDismiss={() => setSuggestion(null)}
+            onConfirm={handleConfirmSuggestion}
+            onOpenDetails={() => navigation.navigate('SmartSuggestion', { name: suggestion.name, count: suggestion.count })}
+          />
+        </View>
       )}
-
-      <SummaryCard
-        month={new Date().toLocaleDateString(undefined, { month: 'long' })}
-        totalSpent={totalSpent}
-        totalIncome={totalIncome}
-        topCategory={topCategory}
-      />
-
-      <View style={styles.actionContainer}>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('SmsReader')}>
-          <Text style={styles.actionIcon}>📥</Text>
-          <Text style={styles.actionLabel}>Import</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Analytics')}>
-          <Text style={styles.actionIcon}>📊</Text>
-          <Text style={styles.actionLabel}>Analytics</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => Alert.alert("Coming Soon", "Budgeting feature in progress!")}>
-          <Text style={styles.actionIcon}>🎯</Text>
-          <Text style={styles.actionLabel}>Budget</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Advice')}>
-          <Text style={styles.actionIcon}>💡</Text>
-          <Text style={styles.actionLabel}>Advice</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate("ModelDownload")}>
-          <Text style={styles.actionIcon}>🤖</Text>
-          <Text style={styles.actionLabel}>AI Model</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleReset}>
-          <Text style={styles.actionIcon}>🗑️</Text>
-          <Text style={styles.actionLabel}>Reset</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Analytics Section */}
-      {totalSpent > 0 && (
-        <CategoryBreakdown data={breakdownData} total={totalSpent} />
-      )}
-
-      <Text style={styles.sectionTitle}>Recent Transactions</Text>
     </View>
-  ), [
-    totalSpent,
-    totalIncome,
-    topCategory,
-    breakdownData,
-    isProcessing,
-    classifierStatus,
-    handleReset,
-    suggestion,
-    categories,
-    editCategoryId,
-    isUpdatingSuggestion
-  ]); // Dependencies updated to prevent stale closures
+  ), [userName, totalSpent, totalIncome, suggestion, categories, editCategoryId, isUpdatingSuggestion]);
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={expenses}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={styles.list}
+        renderSectionHeader={renderSectionHeader}
         ListHeaderComponent={HeaderComponent}
-        refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={fetchData} />
-        }
+        stickySectionHeadersEnabled={true}
+        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} />}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>📝</Text>
-            <Text style={styles.emptyText}>No expenses yet this month.</Text>
-            <Text style={styles.emptySubText}>Tap Voice to start tracking!</Text>
+            <Text style={styles.emptyText}>No expenses yet.</Text>
           </View>
         }
       />
 
-      {/* Edit Details Drawer */}
+      {/* Detail Modal */}
       <Modal
         visible={detailModalVisible}
         transparent={true}
         animationType="slide"
         onRequestClose={() => setDetailModalVisible(false)}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setDetailModalVisible(false)}
-        >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setDetailModalVisible(false)}>
           <View style={styles.drawerContainer}>
             <View style={styles.drawerHandle} />
-            <Text style={styles.drawerTitle}>Edit Transaction</Text>
+            <Text style={styles.drawerTitle}>Transaction Details</Text>
 
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Amount</Text>
-              <Text style={styles.detailValue}>Ksh {selectedExpense?.amount.toLocaleString()}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Date</Text>
-              <Text style={styles.detailValue}>{selectedExpense ? new Date(selectedExpense.date).toLocaleDateString() : ''}</Text>
-            </View>
-
-            {/* Flow Indicator */}
-            {selectedExpense && (selectedExpense.sender || selectedExpense.recipient) && (
-              <View style={{ backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8, marginVertical: 10, alignItems: 'center' }}>
-                <Text style={{ color: '#1565C0', fontWeight: 'bold' }}>
-                  {selectedExpense.sender || 'You'}  ➡️  {selectedExpense.recipient || 'You'}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.divider} />
+            {/* Simple Edit Form */}
+            <Text style={styles.inputLabel}>Amount: Ksh {selectedExpense?.amount.toLocaleString()}</Text>
 
             <Text style={styles.inputLabel}>Description</Text>
             <TextInput
@@ -452,32 +317,28 @@ export default function HomeScreen({ navigation }: any) {
             />
 
             <Text style={styles.inputLabel}>Category</Text>
-            <TouchableOpacity
-              style={styles.input}
-              onPress={() => setCategoryModalVisible(true)}
-            >
-              <Text>{categories.find(c => c.id === editCategoryId)?.name || 'Select Category'}</Text>
+            <TouchableOpacity style={styles.input} onPress={() => setCategoryModalVisible(true)}>
+              <Text>{categories.find(c => c.id === editCategoryId)?.name || 'Uncategorized'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.saveBtn} onPress={handleUpdate}>
-              <Text style={styles.saveBtnText}>Save Changes</Text>
+              <Text style={styles.saveBtnText}>Save</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#FFEBEE', marginTop: 10 }]} onPress={handleDelete}>
-              <Text style={[styles.saveBtnText, { color: '#F44336' }]}>Delete Transaction</Text>
+              <Text style={[styles.saveBtnText, { color: colors.danger }]}>Delete</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* Category Picker Modal */}
+      {/* Category Modal */}
       <Modal visible={categoryModalVisible} transparent={true} animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={[styles.drawerContainer, { height: '50%', paddingBottom: 40 }]}>
+          <View style={[styles.drawerContainer, { height: '50%' }]}>
             <Text style={styles.drawerTitle}>Select Category</Text>
-            <FlatList
-              data={categories}
-              keyExtractor={c => c.id}
+            <SectionList
+              sections={[{ title: 'Categories', data: categories }]}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.catItem} onPress={() => {
                   setEditCategoryId(item.id);
@@ -486,62 +347,78 @@ export default function HomeScreen({ navigation }: any) {
                   <Text style={styles.catText}>{item.name}</Text>
                 </TouchableOpacity>
               )}
+              keyExtractor={(item) => item.id}
             />
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setCategoryModalVisible(false)}>
-              <Text>Cancel</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
-
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F4F7' },
-  list: { paddingBottom: 20 },
-  header: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  welcome: { fontSize: 24, fontWeight: 'bold', color: '#111' },
-  personaBadge: { fontSize: 14, color: '#666', backgroundColor: '#E0E0E0', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, marginTop: 4, overflow: 'hidden' },
-  profileButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5 },
+  container: { flex: 1, backgroundColor: colors.background },
+  list: { paddingBottom: 80 }, // Space for Tab Bar
 
-  actionContainer: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 12, paddingHorizontal: 10 },
-  actionBtn: { alignItems: 'center', width: 60 },
-  actionIcon: { fontSize: 20, marginBottom: 4, backgroundColor: 'white', padding: 10, borderRadius: 14, overflow: 'hidden', textAlign: 'center', width: 42, height: 42 },
-  actionLabel: { fontSize: 10, color: '#333', fontWeight: '500' },
+  sectionHeader: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: colors.background,
+  },
+  sectionTitle: {
+    ...typography.subHeader,
+    color: colors.textSecondary,
+    fontSize: 14,
+    textTransform: 'uppercase',
+  },
 
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#333', marginTop: 12, marginBottom: 8, paddingHorizontal: 20 },
-
-  card: { flexDirection: 'row', backgroundColor: 'white', marginHorizontal: 20, marginBottom: 12, padding: 16, borderRadius: 16, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
-  iconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center', marginRight: 15 },
+  // Card Styles
+  card: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    padding: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
   icon: { fontSize: 20 },
   cardContent: { flex: 1 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  description: { fontSize: 16, fontWeight: '600', color: '#333', flex: 1, marginRight: 10 },
-  amount: { fontSize: 16, fontWeight: 'bold', color: '#F44336' },
-  category: { fontSize: 12, color: '#666', backgroundColor: '#F0F0F0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, overflow: 'hidden' },
-  date: { fontSize: 12, color: '#999' },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  description: { ...typography.body, fontWeight: '600', color: colors.text, flex: 1 },
+  amount: { ...typography.body, fontWeight: '700', color: colors.danger },
+  date: { ...typography.caption, marginTop: 2 },
 
-  // Drawer & Modal Styles (Reused)
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  drawerContainer: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, width: '100%', paddingBottom: 40, maxHeight: '90%' },
-  drawerHandle: { width: 40, height: 5, backgroundColor: '#ddd', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
-  drawerTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, color: '#333', textAlign: 'center' },
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  detailLabel: { color: '#888', fontWeight: '500' },
-  detailValue: { fontWeight: '600', color: '#333' },
-  divider: { height: 1, backgroundColor: '#eee', marginVertical: 15 },
-  inputLabel: { fontSize: 12, color: '#666', marginBottom: 5, marginTop: 10 },
-  input: { backgroundColor: '#f9f9f9', padding: 12, borderRadius: 8, color: '#333', borderWidth: 1, borderColor: '#eee' },
-  saveBtn: { backgroundColor: '#2196F3', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
+  // Empty State
+  emptyContainer: { alignItems: 'center', marginTop: 40 },
+  emptyIcon: { fontSize: 40, marginBottom: 10 },
+  emptyText: { ...typography.body, color: colors.textSecondary },
+
+  // Modal (Drawer)
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  drawerContainer: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
+  drawerHandle: { width: 40, height: 4, backgroundColor: '#E5E7EB', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
+  drawerTitle: { ...typography.header, textAlign: 'center', marginBottom: 20 },
+
+  inputLabel: { ...typography.caption, marginTop: 12, marginBottom: 4 },
+  input: { backgroundColor: colors.background, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
+
+  saveBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 24 },
   saveBtnText: { color: 'white', fontWeight: 'bold' },
-  catItem: { padding: 15, borderBottomWidth: 1, borderColor: '#f0f0f0' },
-  catText: { fontSize: 16 },
-  closeBtn: { padding: 15, alignItems: 'center', marginTop: 10 },
-  emptyContainer: { alignItems: 'center', marginTop: 50 },
-  emptyIcon: { fontSize: 50, marginBottom: 10 },
-  emptyText: { fontSize: 16, fontWeight: 'bold', color: '#555' },
-  emptySubText: { fontSize: 14, color: '#999', marginTop: 5 }
+
+  catItem: { padding: 16, borderBottomWidth: 1, borderColor: colors.border },
+  catText: { ...typography.body, fontSize: 16 },
 });
+
 

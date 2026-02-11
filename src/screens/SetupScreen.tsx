@@ -8,19 +8,20 @@ import {
 } from 'react-native';
 
 type SetupScreenProps = {
-  onComplete: (name: string, persona: string) => void;
+  navigation: any;
 };
 
 const personas = ['Mama Mboga', 'Bodaboda Rider', 'Mochi'];
 
-const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete }) => {
+const SetupScreen: React.FC<SetupScreenProps> = ({ navigation }) => {
   const [name, setName] = useState('');
   const [selectedPersona, setSelectedPersona] = useState('');
 
   const handleSubmit = () => {
     if (name && selectedPersona) {
       console.log(`Selected Persona: ${selectedPersona}, Name: ${name}`);
-      onComplete(name, selectedPersona);
+      // Navigate to MainTabs, replacing the current screen so user can't go back to setup
+      navigation.replace('MainTabs');
     } else {
       console.log('Please fill in all fields');
     }

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView } from 'react-native';
 import { getAIAdvice } from '../services/llm/HuggingFaceService';
+import { colors } from '../theme/colors';
+import { typography } from '../theme/typography';
 
 const AdviceScreen = () => {
     const [advice, setAdvice] = useState('');
@@ -25,7 +27,7 @@ const AdviceScreen = () => {
             <Text style={styles.subtitle}>Powered by HuggingFace (Qwen 2.5)</Text>
 
             <View style={styles.card}>
-                <Text style={styles.cardTitle}>Current Status (Mock)</Text>
+                <Text style={styles.cardTitle}>Current Status</Text>
                 <Text style={styles.cardBody}>Fuel: 5,000 | Meals: 2,000 | Repairs: 1,500</Text>
             </View>
 
@@ -34,12 +36,12 @@ const AdviceScreen = () => {
                 onPress={handleGetAdvice}
                 disabled={loading}
             >
-                <Text style={styles.buttonText}>
-                    {loading ? "Thinking..." : "Pata Ushauri (Get Advice)"}
-                </Text>
+                {loading ? (
+                    <ActivityIndicator color="white" />
+                ) : (
+                    <Text style={styles.buttonText}>Pata Ushauri (Get Advice)</Text>
+                )}
             </TouchableOpacity>
-
-            {loading && <ActivityIndicator size="large" color="#2196F3" style={{ marginTop: 20 }} />}
 
             {advice ? (
                 <ScrollView style={styles.resultContainer}>
@@ -52,17 +54,81 @@ const AdviceScreen = () => {
 };
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 20, backgroundColor: '#F5F7FA' },
-    title: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 5 },
-    subtitle: { fontSize: 14, color: '#666', marginBottom: 20 },
-    card: { backgroundColor: '#fff', padding: 15, borderRadius: 10, marginBottom: 20 },
-    cardTitle: { fontWeight: 'bold', marginBottom: 5 },
-    cardBody: { color: '#555' },
-    button: { backgroundColor: '#2196F3', padding: 15, borderRadius: 10, alignItems: 'center' },
-    buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-    resultContainer: { marginTop: 20, backgroundColor: '#E3F2FD', padding: 15, borderRadius: 10, flex: 1 },
-    resultTitle: { fontWeight: 'bold', fontSize: 18, marginBottom: 10, color: '#1565C0' },
-    resultText: { fontSize: 16, lineHeight: 24, color: '#333' }
+    container: {
+        flex: 1,
+        padding: 20,
+        backgroundColor: colors.background
+    },
+    title: {
+        ...typography.header,
+        color: colors.text,
+        marginBottom: 4
+    },
+    subtitle: {
+        ...typography.caption,
+        color: colors.textSecondary,
+        marginBottom: 24
+    },
+    card: {
+        backgroundColor: colors.surface,
+        padding: 16,
+        borderRadius: 16,
+        marginBottom: 24,
+        borderWidth: 1,
+        borderColor: colors.border,
+        shadowColor: colors.primary,
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 2
+    },
+    cardTitle: {
+        ...typography.subHeader,
+        fontSize: 14,
+        color: colors.textSecondary,
+        marginBottom: 8,
+        textTransform: 'uppercase'
+    },
+    cardBody: {
+        ...typography.body,
+        fontSize: 16,
+        color: colors.text,
+        fontWeight: '600'
+    },
+    button: {
+        backgroundColor: colors.primary,
+        paddingVertical: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4
+    },
+    buttonText: {
+        color: 'white',
+        fontWeight: 'bold',
+        fontSize: 16
+    },
+    resultContainer: {
+        marginTop: 24,
+        backgroundColor: 'white',
+        padding: 20,
+        borderRadius: 16,
+        flex: 1,
+        borderWidth: 1,
+        borderColor: colors.border
+    },
+    resultTitle: {
+        ...typography.subHeader,
+        color: colors.primary,
+        marginBottom: 12
+    },
+    resultText: {
+        ...typography.body,
+        color: colors.text,
+        lineHeight: 24
+    }
 });
 
 export default AdviceScreen;

@@ -2,7 +2,7 @@
 
 export interface MpesaTransaction {
   tx_id: string;
-  type: 'deposit' | 'withdrawal' | 'sent' | 'received' | 'internal' | 'other';
+  type: 'deposit' | 'withdrawal' | 'sent' | 'received' | 'internal' | 'transfer' | 'other';
   direction: 'in' | 'out' | 'internal' | 'unknown';
   action: string;
   amount: number;
@@ -225,6 +225,13 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
 
     if (businessBalMatch) balances.pochi = parseFloat(businessBalMatch[1]);
     if (personalBalMatch) balances.mpesa = parseFloat(personalBalMatch[1]);
+
+    // DETECT INTERNAL TRANSFER IN "SENT"
+    if (to.toUpperCase().includes('POCHI') || to.toUpperCase().includes('M-SHWARI')) {
+      direction = 'internal';
+      type = 'transfer';
+      excludeFromAnalytics = true;
+    }
   }
 
   /** =========================
