@@ -7,6 +7,7 @@ export const colors = {
     // Functional
     success: '#10B981', // Emerald Teal (Growth)
     danger: '#EF4444', // Soft Red (Expense)
+    error: '#EF4444', // Alias for danger
     warning: '#F59E0B',
     info: '#2196F3', // Blue
 

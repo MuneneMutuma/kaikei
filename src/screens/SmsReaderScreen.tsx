@@ -13,6 +13,7 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from "react-native";
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import SmsAndroid from "react-native-get-sms-android";
 import { parseMpesaMessage, MpesaTransaction } from "../utils/mpesaParser";
@@ -36,6 +37,7 @@ const parseMpesaDate = (dateStr: string, timeStr?: string): string => {
 };
 
 export default function SMSReaderScreen() {
+  const insets = useSafeAreaInsets();
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [transactions, setTransactions] = useState<MpesaTransaction[]>([]);
   // State for IDs
@@ -578,7 +580,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { padding: 16, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: colors.border },
   title: { ...typography.header, fontSize: 18, color: colors.text },
-  listContent: { padding: 16 },
+  listContent: { padding: 16, paddingBottom: Platform.OS === 'android' ? 100 : 80 },
 
   card: { backgroundColor: colors.surface, borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: colors.primary, shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
   cardIgnored: { opacity: 0.7, backgroundColor: colors.background },

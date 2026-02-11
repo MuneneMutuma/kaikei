@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TouchableOpacity, Text, View } from 'react-native';
+import { TouchableOpacity, Text, View, StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -16,6 +16,7 @@ import AdviceScreen from './src/screens/AdviceScreen';
 import { SmartSuggestionScreen } from './src/screens/SmartSuggestionScreen';
 import { Database } from './src/services/ledger/Database';
 import { colors } from './src/theme/colors';
+import ProfileScreen from './src/screens/ProfileScreen';
 
 export type RootStackParamList = {
   Setup: undefined;
@@ -31,7 +32,7 @@ export type MainTabParamList = {
   Advice: undefined;
   Import: undefined; // Floating Button Placeholder
   Analytics: undefined;
-  Settings: undefined;
+  Profile: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -57,10 +58,10 @@ const MainTabs = () => {
         tabBarStyle: {
           borderTopWidth: 0,
           elevation: 10,
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
           backgroundColor: colors.surface,
+          paddingTop:0,
+          // paddingBottom: 80, // Extra spacing requested by user
+          height: 68, // Taller tab bar
         },
         tabBarLabelStyle: {
           fontSize: 10,
@@ -106,12 +107,20 @@ const MainTabs = () => {
               <PlusCircle color="white" size={32} />
             </View>
           ),
-          tabBarButton: (props) => (
-            <TouchableOpacity
-              {...props}
-              onPress={() => navigation.navigate('SmsReader')} // Quick Action: Go to Import
-            />
-          ),
+          tabBarButton: (props) => {
+            const { onPress, onLongPress, accessibilityState, accessibilityLabel } = props;
+            return (
+              <TouchableOpacity
+                onPress={() => (navigation as any).navigate('SmsReader')}
+                onLongPress={onLongPress || undefined}
+                accessibilityState={accessibilityState}
+                accessibilityLabel={accessibilityLabel}
+                style={props.style}
+              >
+                {props.children}
+              </TouchableOpacity>
+            );
+          },
         })}
       />
 
@@ -123,9 +132,11 @@ const MainTabs = () => {
           tabBarIcon: ({ color, size }) => <BarChart3 color={color} size={size} />,
         }}
       />
+
+
       <Tab.Screen
-        name="Settings"
-        component={ModelDownloadScreen} // Reusing ModelDownload as Settings for now
+        name="Profile"
+        component={ProfileScreen}
         options={{
           tabBarLabel: 'Profile',
           tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
@@ -147,6 +158,7 @@ const App = () => {
 
   return (
     <SafeAreaProvider>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <NavigationContainer>
         <Stack.Navigator initialRouteName="Setup">
           <Stack.Screen

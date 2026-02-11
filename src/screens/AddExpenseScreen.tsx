@@ -71,7 +71,8 @@ const AddExpenseScreen: React.FC = () => {
         description: finalNote,
         categoryId: catId,
         source: mode === 'voice' ? 'voice' : 'manual',
-        rawText: ''
+        rawText: '',
+        type: 'expense'
       });
 
       console.log("Saved expense to DB");

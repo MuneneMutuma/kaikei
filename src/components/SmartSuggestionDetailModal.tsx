@@ -1,9 +1,10 @@
 import React, { useState, useRef } from 'react';
 import {
-    View, Text, Modal, TouchableOpacity, StyleSheet, FlatList,
-    ActivityIndicator, Alert, SafeAreaView, PanResponder,
-    Animated, Pressable, Platform
+    ActivityIndicator, Alert, PanResponder,
+    Animated, Pressable, Platform,
+    View, Text, Modal, TouchableOpacity, StyleSheet, FlatList
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Expense, Category } from '../services/ledger/Schema';
 
 interface SmartSuggestionDetailModalProps {
@@ -139,15 +140,15 @@ export const SmartSuggestionDetailModal = ({
 
                 <Animated.View
                     style={[
-                        styles.container, 
-                        { 
-                            transform: [{ 
+                        styles.container,
+                        {
+                            transform: [{
                                 translateY: panY.interpolate({
                                     inputRange: [0, 800],
                                     outputRange: [0, 800],
                                     extrapolate: 'clamp' // Prevents pulling the modal UP
-                                }) 
-                            }] 
+                                })
+                            }]
                         }
                     ]}
                 >

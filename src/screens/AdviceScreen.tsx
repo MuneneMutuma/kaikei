@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ScreenHeader } from '../components/ScreenHeader';
 import { getAIAdvice } from '../services/llm/HuggingFaceService';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 
 const AdviceScreen = () => {
+    const insets = useSafeAreaInsets();
     const [advice, setAdvice] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -21,10 +24,16 @@ const AdviceScreen = () => {
         setLoading(false);
     };
 
+    // Remove top padding from container since ScreenHeader handles it, or keep it 0 if ScreenHeader has padding
+    // ScreenHeader adds insets.top + 10. So we can remove paddingTop from here.
+
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>AI Financial Advisor</Text>
-            <Text style={styles.subtitle}>Powered by HuggingFace (Qwen 2.5)</Text>
+        <View style={[styles.container, { paddingBottom: 120 }]}>
+            <ScreenHeader
+                title="AI Financial Advisor"
+                subtitle="Powered by HuggingFace"
+                showNotification={false}
+            />
 
             <View style={styles.card}>
                 <Text style={styles.cardTitle}>Current Status</Text>

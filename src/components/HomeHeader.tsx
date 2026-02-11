@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { View as MotiView } from 'moti';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { Wallet, TrendingUp, TrendingDown, Bell } from 'lucide-react-native';
@@ -13,6 +14,7 @@ interface HomeHeaderProps {
 }
 
 const HomeHeader: React.FC<HomeHeaderProps> = ({ userName, totalSpent, totalIncome }) => {
+    const insets = useSafeAreaInsets();
     const [greeting, setGreeting] = useState('');
 
     useEffect(() => {
@@ -26,7 +28,7 @@ const HomeHeader: React.FC<HomeHeaderProps> = ({ userName, totalSpent, totalInco
     const isPositive = net >= 0;
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
             {/* Header / Top Bar */}
             <View style={styles.topBar}>
                 <View>

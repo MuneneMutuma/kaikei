@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, SectionList, TouchableOpacity,
-  RefreshControl, Alert, Modal, InteractionManager, TextInput
+  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform
 } from 'react-native';
 import { View as MotiView } from 'moti';
 
@@ -118,7 +118,8 @@ export default function HomeScreen({ route, navigation }: any) {
     }
 
     // Heavy Background Tasks
-    InteractionManager.runAfterInteractions(async () => {
+    // Heavy Background Tasks
+    setTimeout(async () => {
       await repo.scanAndFlagInternalTransfers();
       try {
         const suggestions = await onboardingService.getTopPayees(1);
@@ -127,7 +128,7 @@ export default function HomeScreen({ route, navigation }: any) {
       } catch (e) {
         console.log("Error fetching suggestion:", e);
       }
-    });
+    }, 500);
 
     setLoading(false);
   }, [repo, onboardingService]);
@@ -251,11 +252,9 @@ export default function HomeScreen({ route, navigation }: any) {
 
   const HeaderComponent = useCallback(() => (
     <View>
-      <HomeHeader userName={userName} totalSpent={totalSpent} totalIncome={totalIncome} />
-
       {/* Smart Suggestion - Just below Header */}
       {suggestion && (
-        <View style={{ paddingHorizontal: 20, marginTop: -10, marginBottom: 10, zIndex: 10 }}>
+        <View style={{ paddingHorizontal: 20, marginTop: 10, marginBottom: 10, zIndex: 10 }}>
           <SmartSuggestionCard
             payeeName={suggestion.name}
             count={suggestion.count}
@@ -273,10 +272,12 @@ export default function HomeScreen({ route, navigation }: any) {
         </View>
       )}
     </View>
-  ), [userName, totalSpent, totalIncome, suggestion, categories, editCategoryId, isUpdatingSuggestion]);
+  ), [suggestion, categories, editCategoryId, isUpdatingSuggestion]);
 
   return (
     <View style={styles.container}>
+      <HomeHeader userName={userName} totalSpent={totalSpent} totalIncome={totalIncome} />
+
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
@@ -284,7 +285,10 @@ export default function HomeScreen({ route, navigation }: any) {
         renderSectionHeader={renderSectionHeader}
         ListHeaderComponent={HeaderComponent}
         stickySectionHeadersEnabled={true}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[
+          styles.list,
+          { paddingBottom: 120 } // Extra space for Floating Tab Bar
+        ]}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} />}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
