@@ -1,201 +1,119 @@
 import React, { memo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { colors } from '../theme/colors';
+import { typography } from '../theme/typography';
+import { Lightbulb, ChevronRight, X } from 'lucide-react-native';
 
 interface SmartSuggestionCardProps {
     payeeName: string;
     count: number;
-    sampleTx?: any; // MpesaTransaction object
+    sampleTx?: any;
     onConfirm: () => void;
     onDismiss: () => void;
     onSelectCategory: () => void;
     selectedCategoryName?: string;
     isUpdating: boolean;
+    onOpenDetails: () => void;
 }
 
 export const SmartSuggestionCard = memo(({
     payeeName,
     count,
-    sampleTx,
-    onConfirm,
     onDismiss,
-    onSelectCategory,
-    onOpenDetails, // New Prop
-    selectedCategoryName,
-    isUpdating
-}: SmartSuggestionCardProps & { onOpenDetails: () => void }) => {
-
-    // Helper to safe format currency
-    const fmt = (n: any) => typeof n === 'number' ? n.toLocaleString() : n;
+    onOpenDetails,
+}: SmartSuggestionCardProps) => {
 
     return (
         <TouchableOpacity
             style={styles.card}
-            activeOpacity={0.9}
-            onPress={onOpenDetails} // Click whole card to open details
+            activeOpacity={0.8}
+            onPress={onOpenDetails}
         >
-            <View style={styles.headerRow}>
-                <Text style={styles.icon}>💡</Text>
-                <View style={styles.textContainer}>
-                    <Text style={styles.title}>Frequent Payment Detected</Text>
+            {/* Left: Icon & Highlight Bar */}
+            <View style={styles.leftContainer}>
+                <View style={styles.iconContainer}>
+                    <Lightbulb size={20} color={colors.primary} fill={colors.primary} />
+                </View>
+                <View>
+                    <Text style={styles.title}>Categorize {payeeName}</Text>
                     <Text style={styles.subtitle}>
-                        You have <Text style={styles.bold}>{count}</Text> transactions for <Text style={styles.bold}>{payeeName}</Text>.
+                        {count} similar transactions found
                     </Text>
                 </View>
-                <TouchableOpacity onPress={onDismiss} style={styles.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                    <Text style={styles.closeText}>✕</Text>
-                </TouchableOpacity>
             </View>
 
-            {/* Example Box - IMPROVED FORMATTING */}
-            <View style={styles.exampleBox}>
-                <Text style={styles.exampleLabel}>LATEST TRANSACTION:</Text>
-                {sampleTx ? (
-                    <Text style={styles.exampleText}>
-                        <Text style={styles.bold}>Ksh {fmt(sampleTx.amount)}</Text>
-                        <Text style={{ color: '#555' }}> on </Text>
-                        <Text style={styles.bold}>{new Date(sampleTx.date).toLocaleDateString()}</Text>
-                        <Text style={{ color: '#555' }}> at </Text>
-                        <Text style={styles.bold}>{sampleTx.time}</Text>
-                        {"\n"}
-                        <Text style={{ fontSize: 12, color: '#777', fontStyle: 'italic' }} numberOfLines={1}>
-                            "{sampleTx.rawText}"
-                        </Text>
-                    </Text>
-                ) : (
-                    <Text style={styles.exampleText}>
-                        Payee: <Text style={styles.bold}>{payeeName}</Text>
-                    </Text>
-                )}
-            </View>
+            {/* Right: Action & Close */}
+            <View style={styles.rightContainer}>
+                <ChevronRight size={20} color={colors.textSecondary} />
 
-            <View style={styles.actionRow}>
-                <Text style={styles.hintText}>Tap to review & categorize...</Text>
-                {/* 
-                   We hide the direct "Fix All" button here to encourage reviewing via the modal 
-                   OR we can keep it as a shortcut. User asked for "popup of all transactions", 
-                   implying they want to review. Let's keep the card simple and push them to the modal.
-                   But for speed, maybe a quick "Categorize All" is good? 
-                   Let's keep the Quick Action but make the Card Clickable.
+                {/* Close Button - Absolute Positioned or just separate? 
+                    Let's put it top right absolute to not clutter flow 
                 */}
             </View>
+
+            <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={onDismiss}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+                <X size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
         </TouchableOpacity>
     );
 });
 
 const styles = StyleSheet.create({
     card: {
-        backgroundColor: '#E3F2FD', // Light Blue
-        marginHorizontal: 16,
-        marginBottom: 12,
-        padding: 12,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#BBDEFB',
-        shadowColor: '#000',
-        shadowOpacity: 0.05,
-        shadowRadius: 5,
-        elevation: 2,
-    },
-    headerRow: {
+        backgroundColor: colors.surface,
+        borderRadius: 16,
+        padding: 16,
         flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 6,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+
+        // Premium Shadow / Glassmorphic feel
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 4,
+
+        borderWidth: 1,
+        borderColor: 'rgba(76, 175, 80, 0.15)', // Subtle Brand Green Border
     },
-    icon: {
-        fontSize: 20,
-        marginRight: 10,
-    },
-    textContainer: {
+    leftContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
         flex: 1,
+    },
+    iconContainer: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(76, 175, 80, 0.1)', // Light Green bg
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
     },
     title: {
-        fontSize: 13,
+        ...typography.body,
         fontWeight: 'bold',
-        color: '#1565C0',
-        marginBottom: 1,
+        color: colors.text,
+        marginBottom: 2,
     },
     subtitle: {
-        fontSize: 12,
-        color: '#333',
+        ...typography.caption,
+        color: colors.textSecondary,
     },
-    bold: {
-        fontWeight: 'bold',
-        color: '#000',
-    },
-    exampleBox: {
-        backgroundColor: '#FFF',
-        padding: 8,
-        borderRadius: 6,
-        marginBottom: 8,
-        borderLeftWidth: 3,
-        borderLeftColor: '#2196F3',
-    },
-    exampleLabel: {
-        fontSize: 9,
-        color: '#999',
-        fontWeight: 'bold',
-        marginBottom: 2,
-    },
-    exampleText: {
-        fontSize: 12,
-        color: '#333',
-        marginBottom: 2,
-    },
-    exampleDate: {
-        fontSize: 11,
-        color: '#777',
-        marginTop: 4,
+    rightContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingLeft: 10,
     },
     closeBtn: {
-        padding: 4,
-    },
-    closeText: {
-        fontSize: 16,
-        color: '#999',
-    },
-    actionRow: {
-        flexDirection: 'row',
-        gap: 8,
-        height: 36,
-    },
-    pickerBtn: {
-        flex: 1,
-        backgroundColor: '#fff',
-        borderRadius: 6,
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#BBDEFB',
-        paddingHorizontal: 10,
-    },
-    pickerText: {
-        fontSize: 13,
-        color: '#333',
-    },
-    chevron: {
-        fontSize: 10,
-        color: '#999',
-    },
-    confirmBtn: {
-        backgroundColor: '#2196F3',
-        paddingHorizontal: 20,
-        borderRadius: 6,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    disabledBtn: {
-        backgroundColor: '#90CAF9',
-    },
-    confirmText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 13,
-    },
-    hintText: {
-        fontSize: 11,
-        color: '#666',
-        fontStyle: 'italic',
-        marginTop: 4
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        opacity: 0.5
     }
 });

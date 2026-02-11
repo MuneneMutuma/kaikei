@@ -28,7 +28,27 @@ const parseMpesaDate = (dateStr: string, timeStr?: string): string => {
   try {
     const [day, month, yearPart] = dateStr.split('/').map(Number);
     const year = yearPart < 100 ? 2000 + yearPart : yearPart;
-    const date = new Date(year, month - 1, day, 12, 0, 0);
+
+    let hours = 12;
+    let minutes = 0;
+
+    if (timeStr) {
+      // Format: "10:45 PM" or "9:30 AM" or "14:00"
+      const promptMatch = timeStr.match(/(\d+):(\d+)\s?(AM|PM)?/i);
+      if (promptMatch) {
+        let h = parseInt(promptMatch[1], 10);
+        const m = parseInt(promptMatch[2], 10);
+        const meridiem = promptMatch[3]?.toUpperCase();
+
+        if (meridiem === 'PM' && h < 12) h += 12;
+        if (meridiem === 'AM' && h === 12) h = 0;
+
+        hours = h;
+        minutes = m;
+      }
+    }
+
+    const date = new Date(year, month - 1, day, hours, minutes, 0);
     if (isNaN(date.getTime())) throw new Error("Invalid date");
     return date.toISOString();
   } catch (e) {

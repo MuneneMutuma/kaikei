@@ -107,6 +107,23 @@ export class ExpenseRepository {
         }));
     }
 
+    public async addCategory(name: string, isCustom: boolean = true): Promise<Category> {
+        const id = uuidv4();
+        const keywordsStr = JSON.stringify([]); // Empty keywords for custom category
+
+        await this.db.execute(
+            `INSERT INTO categories (id, name, keywords, isCustom) VALUES (?, ?, ?, ?)`,
+            [id, name, keywordsStr, isCustom ? 1 : 0]
+        );
+
+        return {
+            id,
+            name,
+            keywords: [],
+            isCustom
+        };
+    }
+
     async deleteExpense(id: string): Promise<void> {
         await this.db.execute('DELETE FROM expenses WHERE id = ?', [id]);
     }

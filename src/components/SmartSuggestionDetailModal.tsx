@@ -4,8 +4,11 @@ import {
     Animated, Pressable, Platform,
     View, Text, Modal, TouchableOpacity, StyleSheet, FlatList
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Expense, Category } from '../services/ledger/Schema';
+import { colors } from '../theme/colors';
+import { typography } from '../theme/typography';
+import { Check, X, ChevronDown } from 'lucide-react-native';
 
 interface SmartSuggestionDetailModalProps {
     visible: boolean;
@@ -24,6 +27,7 @@ export const SmartSuggestionDetailModal = ({
     categories,
     onConfirmBatch
 }: SmartSuggestionDetailModalProps) => {
+    const insets = useSafeAreaInsets();
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
     const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
@@ -105,28 +109,28 @@ export const SmartSuggestionDetailModal = ({
             <TouchableOpacity
                 style={[styles.itemCard, isSelected && styles.itemSelected]}
                 onPress={() => toggleSelection(item.id)}
+                activeOpacity={0.7}
             >
                 <View style={[styles.checkbox, isSelected ? styles.checked : styles.unchecked]}>
-                    {isSelected && <Text style={{ color: 'white', fontSize: 12 }}>✓</Text>}
+                    {isSelected && <Check size={12} color="white" />}
                 </View>
                 <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={[styles.amount, { color: item.type === 'income' ? '#4CAF50' : '#F44336' }]}>
-                            {item.type === 'income' ? '+' : '-'} Ksh {item.amount.toLocaleString()}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={[styles.amount, { color: item.type === 'income' ? colors.success : colors.text }]}>
+                            {item.type === 'income' ? '+' : ''} Ksh {item.amount.toLocaleString()}
                         </Text>
                         <Text style={styles.date}>{new Date(item.date).toLocaleDateString()}</Text>
                     </View>
-                    <Text style={styles.participant}>
-                        {item.type === 'income' ? 'From: ' : 'To: '}
-                        <Text style={{ fontWeight: 'bold' }}>
-                            {item.type === 'income' ? (item.sender || 'Unknown') : (item.recipient || 'Unknown')}
-                        </Text>
+                    <Text style={styles.participant} numberOfLines={1}>
+                        {item.description}
                     </Text>
-                    <Text style={styles.desc} numberOfLines={1}>{item.description}</Text>
                 </View>
             </TouchableOpacity>
         );
     };
+
+    // Calculate safe bottom padding (min 20)
+    const paddingBottom = Math.max(insets.bottom, 20);
 
     return (
         <Modal
@@ -171,8 +175,8 @@ export const SmartSuggestionDetailModal = ({
                         style={{ flex: 1 }}
                     />
 
-                    {/* INTERACTION ZONE - NO PAN HANDLERS HERE */}
-                    <View style={styles.footer}>
+                    {/* INTERACTION ZONE - NOW WITH SAFE AREA */}
+                    <View style={[styles.footer, { paddingBottom }]}>
                         <TouchableOpacity
                             style={styles.pickerBtn}
                             onPress={() => setIsCategoryPickerVisible(true)}
@@ -180,27 +184,30 @@ export const SmartSuggestionDetailModal = ({
                             <Text style={styles.pickerText}>
                                 {categories.find(c => c.id === selectedCategoryId)?.name || "Select Category..."}
                             </Text>
-                            <Text>▼</Text>
+                            <ChevronDown size={20} color={colors.textSecondary} />
                         </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={[styles.confirmBtn, (!selectedCategoryId || selectedIds.size === 0) && styles.disabledBtn]}
-                            onPress={handleConfirm}
-                            disabled={loading || !selectedCategoryId || selectedIds.size === 0}
-                        >
-                            {loading ? <ActivityIndicator color="white" /> : <Text style={styles.confirmText}>Categorize ({selectedIds.size})</Text>}
-                        </TouchableOpacity>
+                        <View style={styles.actionRow}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={onClose}
+                                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                            >
+                                <Text style={styles.cancelText}>Cancel</Text>
+                            </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={styles.cancelBtn}
-                            onPress={() => {
-                                console.log("Cancel Clicked");
-                                onClose();
-                            }}
-                            hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-                        >
-                            <Text style={styles.cancelText}>Cancel</Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.confirmBtn, (!selectedCategoryId || selectedIds.size === 0) && styles.disabledBtn]}
+                                onPress={handleConfirm}
+                                disabled={loading || !selectedCategoryId || selectedIds.size === 0}
+                            >
+                                {loading ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text style={styles.confirmText}>Categorize ({selectedIds.size})</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </Animated.View>
             </View>
@@ -219,12 +226,15 @@ export const SmartSuggestionDetailModal = ({
                                     setSelectedCategoryId(item.id);
                                     setIsCategoryPickerVisible(false);
                                 }}>
+                                    <View style={[styles.catIcon, { backgroundColor: colors.primary + '20' }]}>
+                                        <Text style={{ fontSize: 16 }}>🏷️</Text>
+                                    </View>
                                     <Text style={styles.catText}>{item.name}</Text>
                                 </TouchableOpacity>
                             )}
                         />
                         <TouchableOpacity style={styles.closePickerBtn} onPress={() => setIsCategoryPickerVisible(false)}>
-                            <Text>Cancel</Text>
+                            <Text style={{ color: colors.textSecondary }}>Cancel</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -235,43 +245,107 @@ export const SmartSuggestionDetailModal = ({
 
 const styles = StyleSheet.create({
     overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    container: { backgroundColor: '#F5F7FA', borderTopLeftRadius: 20, borderTopRightRadius: 20, height: '85%', overflow: 'hidden' },
-    header: { padding: 20, backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, alignItems: 'center', zIndex: 10 },
-    handle: { width: 40, height: 5, backgroundColor: '#DDD', borderRadius: 3, marginBottom: 15 },
-    title: { fontSize: 18, fontWeight: 'bold', color: '#333' },
-    subtitle: { fontSize: 12, color: '#666', marginTop: 4 },
+    container: { backgroundColor: colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '85%', overflow: 'hidden' },
+    header: { padding: 20, backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, alignItems: 'center', zIndex: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+    handle: { width: 40, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, marginBottom: 15 },
+    title: { ...typography.header, fontSize: 18, color: colors.text },
+    subtitle: { ...typography.caption, marginTop: 4 },
 
-    list: { padding: 15 },
-    itemCard: { flexDirection: 'row', backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 10, alignItems: 'center' },
-    itemSelected: { borderColor: '#2196F3', borderWidth: 1, backgroundColor: '#E3F2FD' },
-    checkbox: { width: 20, height: 20, borderRadius: 10, borderWidth: 1, borderColor: '#CCC', marginRight: 15, alignItems: 'center', justifyContent: 'center' },
-    checked: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
+    list: { padding: 20 },
+    itemCard: {
+        flexDirection: 'row',
+        backgroundColor: colors.surface,
+        padding: 16,
+        borderRadius: 16,
+        marginBottom: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'transparent',
+        // Subtle shadow
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        elevation: 1
+    },
+    itemSelected: {
+        borderColor: colors.primary,
+        backgroundColor: colors.primary + '08' // 5% opacity green
+    },
+    checkbox: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        borderWidth: 2,
+        borderColor: '#D1D5DB',
+        marginRight: 16,
+        alignItems: 'center',
+        justifyContent: 'center'
+    },
+    checked: {
+        backgroundColor: colors.primary,
+        borderColor: colors.primary
+    },
     unchecked: {},
-    amount: { fontWeight: 'bold', fontSize: 16, color: '#333' },
-    date: { fontSize: 12, color: '#999' },
-    participant: { fontSize: 14, color: '#333', marginTop: 2 },
-    desc: { fontSize: 12, color: '#777', marginTop: 2 },
+    amount: { ...typography.body, fontWeight: '700', fontSize: 16 },
+    date: { ...typography.caption, fontSize: 12 },
+    participant: { ...typography.body, color: colors.textSecondary, marginTop: 2, fontSize: 13 },
 
     footer: {
         padding: 20,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 20, // Add extra space for the home bar
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         borderTopWidth: 1,
-        borderColor: '#EEE',
-        zIndex: 99
+        borderColor: colors.border,
+        zIndex: 99,
+        // Shadow for the footer (to separate from list)
+        shadowColor: 'black',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 10
     },
-    pickerBtn: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderWidth: 1, borderColor: '#DDD', borderRadius: 10, marginBottom: 15 },
-    pickerText: { fontSize: 16, color: '#333' },
-    confirmBtn: { backgroundColor: '#2196F3', padding: 15, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
-    disabledBtn: { backgroundColor: '#B0BEC5' },
-    confirmText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-    cancelBtn: { alignItems: 'center', padding: 10 },
-    cancelText: { color: '#666', fontSize: 16 },
+    pickerBtn: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 12,
+        backgroundColor: colors.background,
+        marginBottom: 20
+    },
+    pickerText: { ...typography.body, fontSize: 16, color: colors.text },
 
+    actionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 16
+    },
+    confirmBtn: {
+        flex: 1,
+        backgroundColor: colors.primary,
+        padding: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4
+    },
+    disabledBtn: { backgroundColor: '#E0E0E0', shadowOpacity: 0 },
+    confirmText: { ...typography.body, color: 'white', fontWeight: 'bold' },
+    cancelBtn: { alignItems: 'center', padding: 10 },
+    cancelText: { ...typography.body, color: colors.textSecondary, fontWeight: '600' },
+
+    // Picker specific
     pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-    pickerContainer: { backgroundColor: 'white', borderRadius: 15, padding: 20, maxHeight: '60%', elevation: 5 },
-    pickerTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-    catItem: { padding: 15, borderBottomWidth: 1, borderColor: '#EEE' },
-    catText: { fontSize: 16 },
+    pickerContainer: { backgroundColor: colors.surface, borderRadius: 24, padding: 20, maxHeight: '60%', elevation: 5 },
+    pickerTitle: { ...typography.header, fontSize: 18, marginBottom: 20, textAlign: 'center' },
+    catItem: { padding: 16, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: colors.border },
+    catIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    catText: { ...typography.body, fontSize: 16 },
     closePickerBtn: { marginTop: 15, alignItems: 'center', padding: 10 }
 });
