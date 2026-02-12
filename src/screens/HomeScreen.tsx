@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, SectionList, TouchableOpacity,
-  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform
+  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform, StatusBar
 } from 'react-native';
 import { View as MotiView } from 'moti';
 
@@ -40,9 +40,11 @@ export default function HomeScreen({ route, navigation }: any) {
   const [loading, setLoading] = useState(false);
   const [totalSpent, setTotalSpent] = useState(0);
   const [totalIncome, setTotalIncome] = useState(0);
+  const [lastDataHash, setLastDataHash] = useState<string>(''); // For Preventing Re-renders
 
   // Smart Onboarding State
   const [suggestions, setSuggestions] = useState<PayeeCandidate[]>([]);
+  const [lastSuggestionHash, setLastSuggestionHash] = useState<string>(''); // For Preventing Re-renders
   const [suggestion, setSuggestion] = useState<PayeeCandidate | null>(null); // Track active one for Modal
   const [isUpdatingSuggestion, setIsUpdatingSuggestion] = useState(false);
   const onboardingService = React.useMemo(() => new SmartOnboardingService(), []);
@@ -64,19 +66,40 @@ export default function HomeScreen({ route, navigation }: any) {
 
   // 3. Handlers
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    // Only show spinner on initial load or manual refresh
+    // Don't flicker spinner on focus updates if data is cached
 
     try {
-      // ... (keep existing fetch logic for expenses)
       const now = new Date();
       const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      console.log(`[HomeScreen] Fetching data for month: ${monthStr}`);
-      const allExpenses = await repo.getExpensesByMonth(monthStr);
-      console.log(`[HomeScreen] Fetched ${allExpenses.length} expenses`);
 
-      if (allExpenses.length > 0) {
-        console.log(`[HomeScreen] Sample Expense Date: ${allExpenses[0].date}`);
+      const allExpenses = await repo.getExpensesByMonth(monthStr);
+
+      // Compute Hash to avoid unnecessary re-renders
+      // Simple hash: Count + Total Amount + Timestamp of newest item
+      const count = allExpenses.length;
+      if (count === 0) {
+        if (sections.length > 0) {
+          setSections([]);
+          setTotalSpent(0);
+          setTotalIncome(0);
+          setLastDataHash('empty');
+        }
+        return;
       }
+
+      const newestTimestamp = allExpenses.length > 0 ? allExpenses[0].id : ''; // Assuming ID is time-based or use date
+      const totalAmount = allExpenses.reduce((sum, e) => sum + e.amount, 0);
+      const newHash = `${count}-${totalAmount}-${newestTimestamp}`;
+
+      if (newHash === lastDataHash) {
+        console.log("[HomeScreen] Data matches hash, skipping render.");
+        return;
+      }
+
+      console.log(`[HomeScreen] Data changed (Hash: ${newHash}). Updating UI.`);
+      setLastDataHash(newHash);
+      setLoading(true); // Only show loading if we are actually updating
 
       // Calculate Totals
       const spent = allExpenses
@@ -120,26 +143,29 @@ export default function HomeScreen({ route, navigation }: any) {
       // Load Categories
       const cats = await repo.getAllCategories();
       setCategories(cats);
+      setLoading(false);
 
     } catch (e) {
       console.error("Failed to load home data", e);
+      setLoading(false);
     }
 
     // Heavy Background Tasks
+    // Run these AFTER UI update or independently
     setTimeout(async () => {
       await repo.scanAndFlagInternalTransfers();
       try {
         // Fetch TOP 5 Suggestions for the Deck
         const suggs = await onboardingService.getTopPayees(5);
-        console.log("[HomeScreen] Suggestions:", suggs.length);
+        // Only update suggestions if count changed (simple check)
+        // Ideally should check content too but this is a start
         setSuggestions(suggs);
       } catch (e) {
         console.log("Error fetching suggestions:", e);
       }
     }, 500);
 
-    setLoading(false);
-  }, [repo, onboardingService]);
+  }, [repo, onboardingService, lastDataHash, sections.length]);
 
   const handleConfirmSuggestion = async (candidate: PayeeCandidate, catId: string) => {
     // Use passed candidate/catId or fallback to state?
@@ -205,6 +231,12 @@ export default function HomeScreen({ route, navigation }: any) {
   // 4. Effects
   useFocusEffect(
     useCallback(() => {
+      // Ensure Status Bar is dark when on Home (light background)
+      StatusBar.setBarStyle('dark-content');
+      if (Platform.OS === 'android') {
+        StatusBar.setBackgroundColor('transparent');
+        StatusBar.setTranslucent(true);
+      }
       fetchData();
     }, [])
   );
