@@ -17,6 +17,7 @@ import { SmartSuggestionScreen } from './src/screens/SmartSuggestionScreen';
 import { Database } from './src/services/ledger/Database';
 import { colors } from './src/theme/colors';
 import ProfileScreen from './src/screens/ProfileScreen';
+import { SettingsRepository } from './src/services/settings/SettingsRepository';
 
 export type RootStackParamList = {
   Setup: undefined;
@@ -59,7 +60,7 @@ const MainTabs = () => {
           borderTopWidth: 0,
           elevation: 10,
           backgroundColor: colors.surface,
-          paddingTop:0,
+          paddingTop: 0,
           // paddingBottom: 80, // Extra spacing requested by user
           height: 68, // Taller tab bar
         },
@@ -147,20 +148,36 @@ const MainTabs = () => {
 };
 
 const App = () => {
+  const [initialRoute, setInitialRoute] = useState<"Setup" | "MainTabs">("Setup");
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    try {
-      Database.init();
-      console.log('Database initialized successfully');
-    } catch (e) {
-      console.error('Failed to initialize database:', e);
-    }
+    const init = async () => {
+      try {
+        await Database.init();
+        console.log('Database initialized successfully');
+
+        const settings = new SettingsRepository();
+        const isComplete = await settings.isOnboardingComplete();
+        if (isComplete) {
+          setInitialRoute("MainTabs");
+        }
+      } catch (e) {
+        console.error('Failed to initialize:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    init();
   }, []);
+
+  if (loading) return null; // Or a splash screen
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <NavigationContainer>
-        <Stack.Navigator initialRouteName="Setup">
+        <Stack.Navigator initialRouteName={initialRoute}>
           <Stack.Screen
             name="Setup"
             component={SetupScreen}

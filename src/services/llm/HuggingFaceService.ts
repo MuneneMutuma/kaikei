@@ -6,33 +6,44 @@ const client = new HfInference(HF_TOKEN);
 
 /**
  * Generates savings advice based on user categories
- * @param {string} userPersona - 'mama_mboga', 'bodaboda', or 'mochi'
- * @param {string} stats - Summary of expenses
+ * @param {string} userPersona - 'Mama Mboga', 'Bodaboda', etc.
+ * @param {object} financialSummary - Aggregated stats { totalIncome, totalExpense, topCategories }
  */
-export const getAIAdvice = async (userPersona: string, stats: string): Promise<string> => {
+export const getAIAdvice = async (
+    userPersona: string,
+    financialSummary: { totalIncome: number, totalExpense: number, topCategories: { name: string, amount: number }[] }
+): Promise<string> => {
     try {
+        // Privacy Layer: Construct a generic summary string without PII
+        const topCatsStr = financialSummary.topCategories
+            .map(c => `${c.name}: ${c.amount.toLocaleString()}`)
+            .join(', ');
+
+        const statsStr = `Total Income: ${financialSummary.totalIncome.toLocaleString()}, Total Expense: ${financialSummary.totalExpense.toLocaleString()}. Top Expenses: ${topCatsStr}`;
+
         const response = await client.chatCompletion({
-            // Qwen 2.5 7B is powerful and usually available on the free tier
             model: "Qwen/Qwen2.5-7B-Instruct",
             messages: [
                 {
                     role: "system",
-                    content: `You are a financial assistant for a ${userPersona} in Kenya. 
-                    Give advice in English. Be practical and focus on saving money.`
+                    content: `You are a savvy financial advisor in Kenya. Your client is a "${userPersona}".
+                    Analyze their spending. Give 3 short, specific, culturally relevant tips in English mixed with a little Swahili (Sheng).
+                    Focus on: cutting costs in their top expense categories, saving for emergencies, and growing business capital.
+                    Keep it encouraging but firm.`
                 },
                 {
                     role: "user",
-                    content: `Here are my expenses this month: ${stats}. Give me top relevant short tips.`
+                    content: `Here is my financial summary for this month: ${statsStr}. What should I do?`
                 }
             ],
-            max_tokens: 200, // SDK uses max_tokens, API sometimes max_new_tokens. HfInference normalizes this? 
+            max_tokens: 350,
             temperature: 0.7,
         });
 
         return response.choices[0].message.content || "No advice generated.";
     } catch (error) {
         console.error("HF Inference Error (Advice):", error);
-        return "Pole, I can't give advice right now. Check your connection.";
+        return "Pole, connection issue. Please try again later.";
     }
 };
 

@@ -204,13 +204,47 @@ export default function SMSReaderScreen() {
     // Await inside loop yields to microtasks, but not necessarily rendering if synchronous DB calls are heavy.
     // SQLite is async-ish (bridge).
 
+    // We try to find 'Other' or 'General' or just take the first one available.
+    let otherCategory = await repo.current.getCategoryByName('Other');
+
+    if (!otherCategory) {
+      // Fallback to any category
+      const allCats = await repo.current.getAllCategories();
+      if (allCats.length > 0) {
+        otherCategory = allCats[0];
+        console.log(`[SmsReader] 'Other' not found, falling back to '${otherCategory.name}'`);
+      } else {
+        // This is critical: DB has no categories at all.
+        console.warn("[SmsReader] No categories found in DB! Seeding 'Other' as last resort.");
+        try {
+          otherCategory = await repo.current.addCategory('Other', false);
+        } catch (e) {
+          console.error("Failed to seed Other category:", e);
+          Alert.alert("Error", "No categories found and failed to create one. Please restart app.");
+          setLoading(false);
+          return;
+        }
+      }
+    }
+    const otherCategoryId = otherCategory.id;
+
     for (const tx of candidates) {
       try {
         // Re-use logic (abstracted ideally, but copying for safety/speed now)
         // 1. Predict Category (Fast Regex)
         const descriptionToParse = `${tx.from} ${tx.to} ${tx.type} `;
         const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
-        const categoryId = categorySuggestion?.id || repo.current.getCategoryByName('Other')?.id || 'unknown_cat';
+
+        let targetCatId = 'unknown_cat';
+        if (categorySuggestion?.id) {
+          targetCatId = categorySuggestion.id;
+        } else {
+          // Check for 'Other' again implicitly or use the one we found above
+          const fallbackOther = await repo.current.getCategoryByName('Other');
+          targetCatId = fallbackOther?.id || otherCategoryId || 'unknown_cat';
+        }
+
+        const categoryId = targetCatId;
 
         const cleanDesc = tx.direction === 'in'
           ? `Received from ${tx.from} `

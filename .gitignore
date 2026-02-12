@@ -77,3 +77,9 @@ yarn-error.log
 
 .env
 .bak/
+
+# models and binaries
+*.bin
+*.pth
+*.onnx
+*.weights

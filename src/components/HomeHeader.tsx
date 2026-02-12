@@ -16,13 +16,29 @@ interface HomeHeaderProps {
 const HomeHeader: React.FC<HomeHeaderProps> = ({ userName, totalSpent, totalIncome }) => {
     const insets = useSafeAreaInsets();
     const [greeting, setGreeting] = useState('');
+    const [displayName, setDisplayName] = useState(userName);
 
     useEffect(() => {
         const hour = new Date().getHours();
         if (hour < 12) setGreeting('Good Morning');
         else if (hour < 18) setGreeting('Good Afternoon');
         else setGreeting('Good Evening');
-    }, []);
+
+        // Fetch real name from Settings
+        const loadName = async () => {
+            try {
+                const { SettingsRepository } = require('../services/settings/SettingsRepository');
+                const settings = new SettingsRepository();
+                const userSettings = await settings.getUserSettings();
+                if (userSettings.userName) {
+                    setDisplayName(userSettings.userName);
+                }
+            } catch (e) {
+                console.log("Failed to load user name", e);
+            }
+        };
+        loadName();
+    }, [userName]);
 
     const net = totalIncome - totalSpent;
     const isPositive = net >= 0;
@@ -33,7 +49,7 @@ const HomeHeader: React.FC<HomeHeaderProps> = ({ userName, totalSpent, totalInco
             <View style={styles.topBar}>
                 <View>
                     <Text style={styles.greetingSub}>{greeting},</Text>
-                    <Text style={styles.greetingName}>{userName}</Text>
+                    <Text style={styles.greetingName}>{displayName}</Text>
                 </View>
                 <TouchableOpacity style={styles.iconBtn}>
                     <Bell size={24} color={colors.text} />

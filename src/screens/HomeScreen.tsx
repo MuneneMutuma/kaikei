@@ -68,7 +68,13 @@ export default function HomeScreen({ route, navigation }: any) {
     try {
       const now = new Date();
       const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      console.log(`[HomeScreen] Fetching data for month: ${monthStr}`);
       const allExpenses = await repo.getExpensesByMonth(monthStr);
+      console.log(`[HomeScreen] Fetched ${allExpenses.length} expenses`);
+
+      if (allExpenses.length > 0) {
+        console.log(`[HomeScreen] Sample Expense Date: ${allExpenses[0].date}`);
+      }
 
       // Calculate Totals
       const spent = allExpenses
@@ -123,6 +129,7 @@ export default function HomeScreen({ route, navigation }: any) {
       await repo.scanAndFlagInternalTransfers();
       try {
         const suggestions = await onboardingService.getTopPayees(1);
+        console.log("[HomeScreen] Suggestions:", suggestions);
         if (suggestions.length > 0) setSuggestion(suggestions[0]);
         else setSuggestion(null);
       } catch (e) {

@@ -1,27 +1,52 @@
-import { QuickSQLiteConnection, open } from 'react-native-quick-sqlite';
+import { open, OPSQLiteConnection } from '@op-engineering/op-sqlite';
 import { DEFAULT_CATEGORIES } from './Schema';
 import { v4 as uuidv4 } from 'uuid';
+import { KeyManager } from '../security/KeyManager';
 
-const DB_NAME = 'kaikei.sqlite';
+const DB_NAME = 'kaikei_v2.sqlite';
 
 export class Database {
-  private static instance: QuickSQLiteConnection;
+  private static instance: OPSQLiteConnection;
 
-  public static getInstance(): QuickSQLiteConnection {
+  public static getInstance(): OPSQLiteConnection {
     if (!Database.instance) {
-      Database.instance = open({ name: DB_NAME });
+      throw new Error("Database not initialized. Call init() first.");
     }
     return Database.instance;
   }
 
-  public static init(): void {
-    const db = Database.getInstance();
+  // Helper to normalize row access
+  public static getRows(result: any): any[] {
+    if (result.rows?._array) return result.rows._array;
+    if (Array.isArray(result.rows)) return result.rows;
+    // Fallback for iterator
+    const items = [];
+    if (result.rows && typeof result.rows.length === 'number') {
+      for (let i = 0; i < result.rows.length; i++) {
+        // @ts-ignore
+        if (result.rows.item) items.push(result.rows.item(i));
+      }
+    }
+    return items;
+  }
 
-    // Enable WAL mode for concurrency
-    db.execute('PRAGMA journal_mode = WAL');
+  public static async init(): Promise<void> {
+    if (Database.instance) return;
 
-    // Create Categories Table
-    db.execute(`
+    try {
+      const encryptionKey = await KeyManager.getEncryptionKey();
+
+      Database.instance = open({
+        name: DB_NAME,
+        encryptionKey: encryptionKey
+      });
+
+      const db = Database.instance;
+      // Enable WAL mode for concurrency
+      db.execute('PRAGMA journal_mode = WAL');
+
+      // Create Categories Table
+      db.execute(`
       CREATE TABLE IF NOT EXISTS categories (
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL UNIQUE,
@@ -31,9 +56,17 @@ export class Database {
       );
     `);
 
+      // Create Settings Table (Phase 4)
+      db.execute(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT
+      );
+    `);
 
-    // Create Expenses Table
-    db.execute(`
+
+      // Create Expenses Table (Comprehensive Schema v2)
+      db.execute(`
       CREATE TABLE IF NOT EXISTS expenses (
         id TEXT PRIMARY KEY NOT NULL,
         amount REAL NOT NULL,
@@ -42,106 +75,53 @@ export class Database {
         categoryId TEXT NOT NULL,
         source TEXT NOT NULL,
         rawText TEXT,
-        transactionId TEXT UNIQUE, -- Add transactionId
+        transactionId TEXT UNIQUE,
+        excludeFromAnalytics BOOLEAN DEFAULT 0,
+        type TEXT DEFAULT 'expense',
+        sender TEXT,
+        recipient TEXT,
         isVerified BOOLEAN DEFAULT 0,
         synced BOOLEAN DEFAULT 0,
         FOREIGN KEY(categoryId) REFERENCES categories(id)
       );
     `);
 
-    // Create Ignored Transactions Table
-    db.execute(`
+      // Create Ignored Transactions Table
+      db.execute(`
       CREATE TABLE IF NOT EXISTS ignored_transactions (
         transactionId TEXT PRIMARY KEY NOT NULL
       );
     `);
 
-    // Initial Index Creation (moved from migrations for new installs)
-    db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');
-    db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
-    db.execute('CREATE INDEX IF NOT EXISTS idx_unverified_raw ON expenses(id) WHERE isVerified = 0 AND rawText IS NOT NULL');
-
-    // Check for transactionId column and migrate if missing
-    try {
-      const tableInfo = db.execute('PRAGMA table_info(expenses)');
-      // row: { cid, name, type, notnull, dflt_value, pk }
-      const hasTransactionId = tableInfo.rows?._array.some((col: any) => col.name === 'transactionId');
-
-      if (!hasTransactionId) {
-        console.log('Migrating: Adding transactionId column to expenses...');
-        db.execute('ALTER TABLE expenses ADD COLUMN transactionId TEXT');
-        console.log('Migrating: Creating unique index for transactionId...');
+      // Indices
+      try {
+        db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');
+        db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
+        db.execute('CREATE INDEX IF NOT EXISTS idx_unverified_raw ON expenses(id) WHERE isVerified = 0 AND rawText IS NOT NULL');
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_transactionId ON expenses(transactionId)');
-        console.log('Migration successful.');
-      } else {
-        console.log('Database is up to date (transactionId exists).');
+      } catch (e) {
+        console.error("Index creation warning", e);
       }
 
-      // 2. Migration: excludeFromAnalytics (for internal transfers)
-      const hasExcludeCol = tableInfo.rows?._array.some((col: any) => col.name === 'excludeFromAnalytics');
-      if (!hasExcludeCol) {
-        console.log('Migrating: Adding excludeFromAnalytics column...');
-        db.execute('ALTER TABLE expenses ADD COLUMN excludeFromAnalytics BOOLEAN DEFAULT 0');
-      }
-
-      // 3. Migration: type (income vs expense)
-      const hasTypeCol = tableInfo.rows?._array.some((col: any) => col.name === 'type');
-      if (!hasTypeCol) {
-        console.log('Migrating: Adding type column...');
-        db.execute("ALTER TABLE expenses ADD COLUMN type TEXT DEFAULT 'expense'");
-      }
-
-      // 4. Migration: sender and recipient
-      const hasSenderCol = tableInfo.rows?._array.some((col: any) => col.name === 'sender');
-      if (!hasSenderCol) {
-        console.log('Migrating: Adding sender column...');
-        db.execute("ALTER TABLE expenses ADD COLUMN sender TEXT");
-      }
-
-      const hasRecipientCol = tableInfo.rows?._array.some((col: any) => col.name === 'recipient');
-      if (!hasRecipientCol) {
-        console.log('Migrating: Adding recipient column...');
-        db.execute("ALTER TABLE expenses ADD COLUMN recipient TEXT");
-      }
-
-      // 6. Migration: Index on recipient (for Smart Suggestions)
-      // Use NOCASE to match the query using COLLATE NOCASE
-      console.log('Migrating: Checking recipient index...');
-      db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');
-
-      // 7. Migration: Index on Date (for general sorting speed)
-      console.log('Migrating: Checking date index...');
-      db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
-
-      // 5. Migration: isVerified
-      const hasVerifiedCol = tableInfo.rows?._array.some((col: any) => col.name === 'isVerified');
-      if (!hasVerifiedCol) {
-        console.log('Migrating: Adding isVerified column...');
-        db.execute("ALTER TABLE expenses ADD COLUMN isVerified BOOLEAN DEFAULT 0");
-      }
-
-    } catch (e) {
-      console.error('Migration failed:', e);
-    }
-
-    // Seed Defaults if empty
-    const result = db.execute('SELECT COUNT(*) as count FROM categories');
-    if (result.rows?._array[0].count === 0) {
-      console.log('Seeding default categories...');
+      // Seed Defaults if empty
+      // Expectation: Ensure default categories exist.
+      // We use INSERT OR IGNORE on the unique 'name' column.
+      console.log('Ensuring default categories exist...');
       DEFAULT_CATEGORIES.forEach(cat => {
-        const id = uuidv4(); // We'll need a UUID generator. Using simple random for now if uuid missing
+        const id = uuidv4();
+        // SQLite INSERT OR IGNORE will skip if 'name' exists (UNIQUE constraint)
         db.execute(
-          'INSERT INTO categories (id, name, keywords, isCustom) VALUES (?, ?, ?, ?)',
+          'INSERT OR IGNORE INTO categories (id, name, keywords, isCustom) VALUES (?, ?, ?, ?)',
           [id, cat.name, JSON.stringify(cat.keywords), cat.isCustom ? 1 : 0]
         );
       });
+    } catch (e) {
+      console.error("Database initialization failed", e);
+      throw e;
     }
   }
-
   public async executeAsync(sql: string, params: any[] = []): Promise<any> {
     const db = Database.getInstance();
-    // QuickSQLite 8.x supports executeAsync. 
-    // Note: The types might differ slightly, returning a Promise<QueryResult>
     return db.executeAsync(sql, params);
   }
 }

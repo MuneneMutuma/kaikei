@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
+import { SettingsRepository } from '../services/settings/SettingsRepository';
 
 type SetupScreenProps = {
   navigation: any;
@@ -17,11 +18,17 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ navigation }) => {
   const [name, setName] = useState('');
   const [selectedPersona, setSelectedPersona] = useState('');
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (name && selectedPersona) {
       console.log(`Selected Persona: ${selectedPersona}, Name: ${name}`);
-      // Navigate to MainTabs, replacing the current screen so user can't go back to setup
-      navigation.replace('MainTabs');
+      try {
+        const settingsRepo = new SettingsRepository();
+        await settingsRepo.saveUserProfile(name, selectedPersona);
+        // Navigate to MainTabs, replacing the current screen so user can't go back to setup
+        navigation.replace('MainTabs');
+      } catch (e) {
+        console.error("Failed to save setup:", e);
+      }
     } else {
       console.log('Please fill in all fields');
     }

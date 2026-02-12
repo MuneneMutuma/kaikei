@@ -22,7 +22,9 @@ export class SmartOnboardingService {
      * LAZY LOADING: Returns metadata only. Details fetched on tap.
      */
     public async getTopPayees(limit: number = 5): Promise<PayeeCandidate[]> {
-        const raw = this.repo.getFrequentRecipients(limit);
+        const raw = await this.repo.getFrequentRecipients(limit);
+
+        console.log("[SmartOnboardingService] Raw:", raw);
 
         const candidates: PayeeCandidate[] = [];
 
@@ -63,7 +65,10 @@ export class SmartOnboardingService {
     /**
      * Helper: Get available categories for the UI
      */
-    public getCategories(): Category[] {
-        return this.repo.getAllCategories();
+    /**
+     * Helper: Get available categories for the UI
+     */
+    public async getCategories(): Promise<Category[]> {
+        return await this.repo.getAllCategories();
     }
 }

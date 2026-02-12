@@ -1,0 +1,173 @@
+import React from 'react';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, Share, Platform } from 'react-native';
+import { colors } from '../theme/colors';
+import { spacing } from '../theme/spacing';
+
+interface BackupModalProps {
+    visible: boolean;
+    onClose: () => void;
+    filePath?: string;
+    error?: string;
+}
+
+export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, filePath, error }) => {
+
+    const handleShare = async () => {
+        if (!filePath) return;
+        try {
+            await Share.share({
+                title: 'Kaikei Backup',
+                message: 'Here is your Kaikei data backup.',
+                url: Platform.OS === 'ios' ? filePath : `file://${filePath}`,
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    return (
+        <Modal
+            visible={visible}
+            transparent
+            animationType="fade"
+            onRequestClose={onClose}
+        >
+            <View style={styles.overlay}>
+                <View style={styles.card}>
+                    {/* Header */}
+                    <View style={[styles.header, { backgroundColor: error ? colors.danger : colors.success }]}>
+                        <Text style={styles.headerTitle}>
+                            {error ? 'Backup Failed' : 'Backup Complete'}
+                        </Text>
+                    </View>
+
+                    {/* Content */}
+                    <View style={styles.content}>
+                        {error ? (
+                            <Text style={styles.text}>{error}</Text>
+                        ) : (
+                            <>
+                                <Text style={styles.text}>Your data has been securely exported.</Text>
+                                <View style={styles.pathContainer}>
+                                    <Text style={styles.label}>Saved to:</Text>
+                                    <Text style={styles.path}>{filePath}</Text>
+                                </View>
+                                <Text style={styles.hint}>
+                                    Check your "Downloads/KaikeiBackups" folder.
+                                </Text>
+                            </>
+                        )}
+                    </View>
+
+                    {/* Actions */}
+                    <View style={styles.footer}>
+                        {!error && filePath && (
+                            <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleShare}>
+                                <Text style={styles.buttonTextPrimary}>Share / Open</Text>
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={onClose}>
+                            <Text style={styles.buttonTextSecondary}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        </Modal>
+    );
+};
+
+const styles = StyleSheet.create({
+    overlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.6)', // Glass backdrop
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: spacing.lg,
+    },
+    card: {
+        width: '100%',
+        maxWidth: 340,
+        backgroundColor: colors.surface,
+        borderRadius: 20,
+        overflow: 'hidden',
+        // Shadow
+        elevation: 10,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+    },
+    header: {
+        padding: spacing.md,
+        alignItems: 'center',
+    },
+    headerTitle: {
+        color: '#FFF',
+        fontSize: 18,
+        fontWeight: 'bold',
+    },
+    content: {
+        padding: spacing.lg,
+    },
+    text: {
+        fontSize: 16,
+        color: colors.text,
+        marginBottom: spacing.md,
+        textAlign: 'center',
+    },
+    pathContainer: {
+        backgroundColor: colors.background,
+        padding: spacing.sm,
+        borderRadius: 8,
+        marginBottom: spacing.sm,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    label: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        fontWeight: '600',
+        marginBottom: 2,
+    },
+    path: {
+        fontSize: 13,
+        color: colors.primary,
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    hint: {
+        fontSize: 14,
+        color: colors.textSecondary,
+        textAlign: 'center',
+        fontStyle: 'italic',
+    },
+    footer: {
+        flexDirection: 'row',
+        padding: spacing.md,
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+    },
+    button: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginHorizontal: 4,
+    },
+    primaryButton: {
+        backgroundColor: colors.primary,
+    },
+    secondaryButton: {
+        backgroundColor: colors.background,
+    },
+    buttonTextPrimary: {
+        color: '#FFF',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    buttonTextSecondary: {
+        color: colors.text,
+        fontWeight: '600',
+        fontSize: 16,
+    },
+});

@@ -44,6 +44,7 @@ export const SmartSuggestionScreen = () => {
     const loadData = async () => {
         try {
             const txs = await onboardingService.getTransactionsForRecipient(name);
+            console.log("[SmartSuggestionScreen] Transactions:", txs);
             setTransactions(txs);
             setSelectedIds(new Set(txs.map(t => t.id))); // Select all by default
 

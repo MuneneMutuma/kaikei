@@ -1,12 +1,66 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Switch, Alert } from 'react-native';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell } from 'lucide-react-native';
+import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell, Save } from 'lucide-react-native';
+import { BackupService } from '../services/backup/BackupService';
+import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
+
+import { BackupModal } from '../components/BackupModal';
 
 export default function ProfileScreen() {
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+    const [userProfile, setUserProfile] = useState({ name: 'User', persona: 'Standard', email: '' });
+    const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+
+    // Backup State
+    const [backupModalVisible, setBackupModalVisible] = useState(false);
+    const [backupPath, setBackupPath] = useState<string | undefined>(undefined);
+    const [backupError, setBackupError] = useState<string | undefined>(undefined);
+
+    React.useEffect(() => {
+        const loadProfile = async () => {
+            try {
+                const { SettingsRepository } = require('../services/settings/SettingsRepository');
+                const settings = new SettingsRepository();
+                const data = await settings.getUserSettings();
+                setUserProfile({
+                    name: data.userName || 'User',
+                    persona: data.userPersona || 'Standard',
+                    email: 'user@kaikei.app'
+                });
+            } catch (e) {
+                console.error("Profile load error", e);
+            }
+        };
+        loadProfile();
+    }, []);
+
+    const handleBackup = async () => {
+        const backupService = new BackupService();
+        const result = await backupService.createBackup();
+
+        if (result.success) {
+            setBackupPath(result.path);
+            setBackupError(undefined);
+        } else {
+            setBackupError("Could not create backup file. Please check permissions.");
+            setBackupPath(undefined);
+        }
+        setBackupModalVisible(true);
+    };
+
+    const handleDeleteAll = async () => {
+        try {
+            const repo = new ExpenseRepository();
+            await repo.clearAll();
+            setDeleteModalVisible(false);
+            console.log("All transactions deleted.");
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     const renderMenuItem = (icon: React.ReactNode, label: string, value?: string, isSwitch?: boolean) => (
         <TouchableOpacity style={styles.menuItem} disabled={isSwitch}>
@@ -40,18 +94,18 @@ export default function ProfileScreen() {
                 {/* Profile Card */}
                 <View style={styles.profileCard}>
                     <View style={styles.avatarContainer}>
-                        <Text style={styles.avatarText}>JD</Text>
+                        <Text style={styles.avatarText}>{userProfile.name.charAt(0).toUpperCase()}</Text>
                     </View>
                     <View>
-                        <Text style={styles.userName}>John Doe</Text>
-                        <Text style={styles.userEmail}>john.doe@example.com</Text>
+                        <Text style={styles.userName}>{userProfile.name}</Text>
+                        <Text style={styles.userEmail}>{userProfile.persona} Account</Text>
                     </View>
                 </View>
 
                 {/* Section: Account */}
                 <Text style={styles.sectionTitle}>Account</Text>
                 <View style={styles.section}>
-                    {renderMenuItem(<User size={20} color={colors.primary} />, "Personal Info")}
+                    {renderMenuItem(<User size={20} color={colors.primary} />, "Personal Info", userProfile.name)}
                     {renderMenuItem(<CreditCard size={20} color={colors.primary} />, "Payment Methods", "M-Pesa")}
                 </View>
 
@@ -60,17 +114,71 @@ export default function ProfileScreen() {
                 <View style={styles.section}>
                     {renderMenuItem(<Bell size={20} color={colors.primary} />, "Notifications", undefined, true)}
                     {renderMenuItem(<Shield size={20} color={colors.primary} />, "Privacy & Security")}
+                    <TouchableOpacity onPress={handleBackup}>
+                        <View style={styles.menuItem}>
+                            <View style={styles.menuIconContainer}>
+                                <Save size={20} color={colors.primary} />
+                            </View>
+                            <View style={styles.menuTextContainer}>
+                                <Text style={styles.menuLabel}>Export Data (Backup)</Text>
+                            </View>
+                            <View style={styles.menuRight}>
+                                <ChevronRight size={20} color={colors.textSecondary} />
+                            </View>
+                        </View>
+                    </TouchableOpacity>
+
+                    {/* Delete All Data */}
+                    <TouchableOpacity onPress={() => setDeleteModalVisible(true)}>
+                        <View style={styles.menuItem}>
+                            <View style={[styles.menuIconContainer, { backgroundColor: '#FFEBEE' }]}>
+                                <LogOut size={20} color={colors.error} />
+                            </View>
+                            <View style={styles.menuTextContainer}>
+                                <Text style={[styles.menuLabel, { color: colors.error }]}>Delete All Data</Text>
+                            </View>
+                        </View>
+                    </TouchableOpacity>
+
                     {renderMenuItem(<Settings size={20} color={colors.primary} />, "App Preferences")}
                 </View>
 
                 {/* Logout */}
-                <TouchableOpacity style={styles.logoutBtn}>
-                    <LogOut size={20} color={colors.error} />
-                    <Text style={styles.logoutText}>Log Out</Text>
-                </TouchableOpacity>
-
                 <Text style={styles.version}>Version 1.0.0 (Beta)</Text>
             </ScrollView>
+
+            {/* Custom Delete Confirmation Modal */}
+            {deleteModalVisible && (
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContainer}>
+                        <Text style={styles.modalTitle}>Reset Database</Text>
+                        <Text style={styles.modalText}>
+                            Are you sure you want to delete ALL transactions? This cannot be undone.
+                        </Text>
+                        <View style={styles.modalActions}>
+                            <TouchableOpacity
+                                style={[styles.modalBtn, styles.modalBtnCancel]}
+                                onPress={() => setDeleteModalVisible(false)}
+                            >
+                                <Text style={styles.modalBtnTextCancel}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.modalBtn, styles.modalBtnDelete]}
+                                onPress={handleDeleteAll}
+                            >
+                                <Text style={styles.modalBtnTextDelete}>Delete All</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            )}
+
+            <BackupModal
+                visible={backupModalVisible}
+                onClose={() => setBackupModalVisible(false)}
+                filePath={backupPath}
+                error={backupError}
+            />
         </View>
     );
 }
@@ -184,5 +292,61 @@ const styles = StyleSheet.create({
         color: colors.textSecondary,
         marginTop: 24,
         fontSize: 12,
+    },
+    // Modal Styles
+    modalOverlay: {
+        position: 'absolute',
+        top: 0, bottom: 0, left: 0, right: 0,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000
+    },
+    modalContainer: {
+        width: '85%',
+        backgroundColor: 'white',
+        borderRadius: 20,
+        padding: 24,
+        alignItems: 'center',
+        elevation: 5
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: colors.text,
+        marginBottom: 12
+    },
+    modalText: {
+        fontSize: 14,
+        color: colors.textSecondary,
+        textAlign: 'center',
+        marginBottom: 24,
+        lineHeight: 20
+    },
+    modalActions: {
+        flexDirection: 'row',
+        width: '100%',
+        justifyContent: 'space-between'
+    },
+    modalBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        alignItems: 'center',
+        marginHorizontal: 8
+    },
+    modalBtnCancel: {
+        backgroundColor: '#f5f5f5'
+    },
+    modalBtnDelete: {
+        backgroundColor: colors.error
+    },
+    modalBtnTextCancel: {
+        color: colors.textSecondary,
+        fontWeight: '600'
+    },
+    modalBtnTextDelete: {
+        color: 'white',
+        fontWeight: '600'
     }
 });

@@ -56,7 +56,7 @@ const AddExpenseScreen: React.FC = () => {
       const date = new Date().toISOString();
 
       // Get Category ID if possible (Assuming name matching or default 'other')
-      const catObj = repo.getCategoryByName(finalCategory);
+      const catObj = await repo.getCategoryByName(finalCategory);
       const catId = catObj ? catObj.id : 'other'; // Simplified fallback
 
       await repo.addExpense({
