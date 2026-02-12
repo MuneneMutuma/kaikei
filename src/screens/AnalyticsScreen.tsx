@@ -96,46 +96,30 @@ export default function AnalyticsScreen() {
         }, 50);
     };
 
-    const handlePointPress = async (item: any) => {
-        // Use safe date accessor
+    const handlePointPress = (item: any) => {
         const dateToFetch = item.date || item.label;
         if (!dateToFetch) return;
 
-        // 1. Set the date first to trigger the Modal "Visible" prop
+        console.log(`[Analytics] Point Tapped:`, item);
+
         setSelectedDate(dateToFetch);
         setSelectedPoint({ label: dateToFetch, value: item.value });
 
-        console.log(`[Analytics] Point Tapped:`, item);
+        // Use pre-fetched breakdown (already loaded during fetchAnalytics)
+        const rawBreakdown = item.breakdown || [];
+        const coloredCategories = rawBreakdown.map((cat: any, index: number) => {
+            const existing = categoryData.find(c => c.name === cat.name);
+            return {
+                name: cat.name,
+                total: cat.amount,
+                color: existing ? existing.color : CHART_COLORS[index % CHART_COLORS.length]
+            };
+        });
 
-        // 2. Clear previous breakdown so the sheet doesn't show old data while loading
-        setDailyBreakdown(null);
-
-        // 3. Small delay to let the Modal mount before heavy data fetching
-        setTimeout(async () => {
-            try {
-                const repository = new ExpenseRepository();
-                const breakdown = await repository.getCategoryBreakdownForDate(dateToFetch);
-
-                // 4. Update the breakdown data with Colors
-                const coloredBreakdown = {
-                    total: breakdown.total,
-                    categories: breakdown.categories.map((cat, index) => {
-                        // Try to find existing color from main chart
-                        const existing = categoryData.find(c => c.name === cat.name);
-                        return {
-                            ...cat,
-                            color: existing ? existing.color : CHART_COLORS[index % CHART_COLORS.length]
-                        };
-                    })
-                };
-
-                setDailyBreakdown(coloredBreakdown);
-            } catch (e) {
-                console.error("Failed to fetch daily breakdown", e);
-                Alert.alert("Error", "Could not load details for this day.");
-                handleDismissSheet();
-            }
-        }, 200);
+        setDailyBreakdown({
+            total: item.value,
+            categories: coloredCategories
+        });
     };
 
     const handleDismissSheet = () => {
@@ -309,7 +293,7 @@ export default function AnalyticsScreen() {
 
                 // No onPress here! This keeps scrolling smooth.
                 // Interaction handled via Pointer Tooltip.
-                onPress: () => handlePointPress({ label: d.day, value: d.total || 0, date: d.day }),
+                onPress: () => handlePointPress({ label: d.day, value: d.total || 0, date: d.day, breakdown: breakdownMap[d.day] || [] }),
 
                 labelTextStyle: { color: colors.textSecondary, fontSize: 10, width: 30, textAlign: 'center' },
                 // Visual Hit-Box
@@ -569,7 +553,8 @@ export default function AnalyticsScreen() {
                                         onPress={undefined}
                                         focusEnabled={false} // Allow ScrollView to win touch events
                                         dataPointsRadius={6}
-                                        pointerConfig={{
+                                        // @ts-ignore — TEST: disable pointer to test tap-to-drawer
+                                        pointerConfig={false && {
                                             activatePointersOnLongPress: true,
                                             pointerVanishDelay: 10000,
                                             pointerStripWidth: 2,

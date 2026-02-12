@@ -333,37 +333,6 @@ export class ExpenseRepository {
         return Database.getRows(result) as { day: string; total: number }[];
     }
 
-    public async getCategoryBreakdownForDate(date: string): Promise<{ total: number; categories: { name: string; total: number }[] }> {
-        // 1. Get total for the day
-        const totalResult = await this.db.execute(
-            `SELECT SUM(amount) as total
-            FROM expenses
-            WHERE SUBSTR(datetime(date, 'localtime'), 1, 10) = ?
-            AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
-            AND type = 'expense'`,
-            [date]
-        );
-        const total = (Database.getRows(totalResult)[0] as any)?.total || 0;
-
-        // 2. Get breakdown by category
-        // Fixed: Removed c.icon, c.color as they don't exist in DB
-        const result = await this.db.execute(
-            `SELECT c.name, SUM(e.amount) as total
-            FROM expenses e
-            JOIN categories c ON e.categoryId = c.id
-            WHERE SUBSTR(datetime(e.date, 'localtime'), 1, 10) = ?
-            AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
-            AND e.type = 'expense'
-            GROUP BY c.id
-            ORDER BY total DESC
-            LIMIT 5`,
-            [date]
-        );
-
-        const categories = Database.getRows(result) as { name: string; total: number }[];
-
-        return { total, categories };
-    }
 
     public getUncategorizedExpenses(limit: number = 20): Expense[] {
         // Get 'Other' category ID first or assume we filter by it.
