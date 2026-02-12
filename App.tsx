@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Home, Lightbulb, User, PlusCircle, BarChart3 } from 'lucide-react-native';
 
 import SetupScreen from './src/screens/SetupScreen';
@@ -174,42 +175,44 @@ const App = () => {
   if (loading) return null; // Or a splash screen
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      <NavigationContainer>
-        <Stack.Navigator initialRouteName={initialRoute}>
-          <Stack.Screen
-            name="Setup"
-            component={SetupScreen}
-            options={{ headerShown: false }}
-          />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <NavigationContainer>
+          <Stack.Navigator initialRouteName={initialRoute}>
+            <Stack.Screen
+              name="Setup"
+              component={SetupScreen}
+              options={{ headerShown: false }}
+            />
 
-          {/* Main App Entry Point */}
-          <Stack.Screen
-            name="MainTabs"
-            component={MainTabs}
-            options={{ headerShown: false }}
-          />
+            {/* Main App Entry Point */}
+            <Stack.Screen
+              name="MainTabs"
+              component={MainTabs}
+              options={{ headerShown: false }}
+            />
 
-          {/* Modals & Full Screen Flows */}
-          <Stack.Screen
-            name="AddExpense"
-            component={AddExpenseScreen}
-            options={{ title: 'Add Expense' }}
-          />
-          <Stack.Screen
-            name="SmsReader"
-            component={SmsReaderScreen}
-            options={{ title: 'Import Transactions' }}
-          />
-          <Stack.Screen
-            name="SmartSuggestion"
-            component={SmartSuggestionScreen}
-            options={{ headerShown: false }}
-          />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </SafeAreaProvider>
+            {/* Modals & Full Screen Flows */}
+            <Stack.Screen
+              name="AddExpense"
+              component={AddExpenseScreen}
+              options={{ title: 'Add Expense' }}
+            />
+            <Stack.Screen
+              name="SmsReader"
+              component={SmsReaderScreen}
+              options={{ title: 'Import Transactions' }}
+            />
+            <Stack.Screen
+              name="SmartSuggestion"
+              component={SmartSuggestionScreen}
+              options={{ headerShown: false }}
+            />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 };
 

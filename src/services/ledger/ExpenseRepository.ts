@@ -302,8 +302,8 @@ export class ExpenseRepository {
         return Database.getRows(result) as Expense[];
     }
 
-    public getCategoryTotals(startDate: string, endDate: string): { name: string; total: number }[] {
-        const result = this.db.execute(
+    public async getCategoryTotals(startDate: string, endDate: string): Promise<{ name: string; total: number }[]> {
+        const result = await this.db.execute(
             `SELECT c.name, SUM(e.amount) as total
             FROM expenses e
             JOIN categories c ON e.categoryId = c.id
@@ -317,9 +317,9 @@ export class ExpenseRepository {
         return Database.getRows(result) as { name: string; total: number }[];
     }
 
-    public getDailyTotals(startDate: string, endDate: string): { day: string; total: number }[] {
+    public async getDailyTotals(startDate: string, endDate: string): Promise<{ day: string; total: number }[]> {
         // SQLite: SUBSTR(date, 1, 10) extracts 'YYYY-MM-DD'
-        const result = this.db.execute(
+        const result = await this.db.execute(
             `SELECT SUBSTR(date, 1, 10) as day, SUM(amount) as total
             FROM expenses
             WHERE date >= ? AND date <= ? 

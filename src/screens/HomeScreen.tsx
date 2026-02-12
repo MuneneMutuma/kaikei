@@ -9,7 +9,7 @@ import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { Expense, Category } from "../services/ledger/Schema";
 import { useFocusEffect } from '@react-navigation/native';
 import { AutoClassifier } from '../services/intelligence/AutoClassifier';
-import { SmartSuggestionCard } from "../components/SmartSuggestionCard";
+import { SuggestionDeck } from "../components/SuggestionDeck";
 import { SmartOnboardingService, PayeeCandidate } from "../services/intelligence/SmartOnboardingService";
 import HomeHeader from "../components/HomeHeader";
 import { colors } from "../theme/colors";
@@ -42,7 +42,8 @@ export default function HomeScreen({ route, navigation }: any) {
   const [totalIncome, setTotalIncome] = useState(0);
 
   // Smart Onboarding State
-  const [suggestion, setSuggestion] = useState<PayeeCandidate | null>(null);
+  const [suggestions, setSuggestions] = useState<PayeeCandidate[]>([]);
+  const [suggestion, setSuggestion] = useState<PayeeCandidate | null>(null); // Track active one for Modal
   const [isUpdatingSuggestion, setIsUpdatingSuggestion] = useState(false);
   const onboardingService = React.useMemo(() => new SmartOnboardingService(), []);
 
@@ -66,6 +67,7 @@ export default function HomeScreen({ route, navigation }: any) {
     setLoading(true);
 
     try {
+      // ... (keep existing fetch logic for expenses)
       const now = new Date();
       const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       console.log(`[HomeScreen] Fetching data for month: ${monthStr}`);
@@ -124,33 +126,42 @@ export default function HomeScreen({ route, navigation }: any) {
     }
 
     // Heavy Background Tasks
-    // Heavy Background Tasks
     setTimeout(async () => {
       await repo.scanAndFlagInternalTransfers();
       try {
-        const suggestions = await onboardingService.getTopPayees(1);
-        console.log("[HomeScreen] Suggestions:", suggestions);
-        if (suggestions.length > 0) setSuggestion(suggestions[0]);
-        else setSuggestion(null);
+        // Fetch TOP 5 Suggestions for the Deck
+        const suggs = await onboardingService.getTopPayees(5);
+        console.log("[HomeScreen] Suggestions:", suggs.length);
+        setSuggestions(suggs);
       } catch (e) {
-        console.log("Error fetching suggestion:", e);
+        console.log("Error fetching suggestions:", e);
       }
     }, 500);
 
     setLoading(false);
   }, [repo, onboardingService]);
 
-  const handleConfirmSuggestion = async () => {
-    if (!suggestion || !editCategoryId) {
+  const handleConfirmSuggestion = async (candidate: PayeeCandidate, catId: string) => {
+    // Use passed candidate/catId or fallback to state?
+    // The Deck calls this with specific args
+    const targetName = candidate?.name || suggestion?.name;
+    const targetCat = catId || editCategoryId;
+
+    if (!targetName || !targetCat) {
       Alert.alert("Select Category", "Please pick a category first.");
       return;
     }
     setIsUpdatingSuggestion(true);
     try {
-      const count = await onboardingService.labelPayee(suggestion.name, editCategoryId);
+      const count = await onboardingService.labelPayee(targetName, targetCat);
       Alert.alert("Awesome! 🚀", `Categorized ${count} transactions.`);
+
+      // Remove from local list immediately
+      setSuggestions(prev => prev.filter(s => s.name !== targetName));
       setSuggestion(null);
       setEditCategoryId("");
+
+      // Refresh Data (to show new categories in list)
       fetchData();
     } catch (e) {
       Alert.alert("Error", "Failed to update.");
@@ -259,27 +270,33 @@ export default function HomeScreen({ route, navigation }: any) {
 
   const HeaderComponent = useCallback(() => (
     <View>
-      {/* Smart Suggestion - Just below Header */}
-      {suggestion && (
-        <View style={{ paddingHorizontal: 20, marginTop: 10, marginBottom: 10, zIndex: 10 }}>
-          <SmartSuggestionCard
-            payeeName={suggestion.name}
-            count={suggestion.count}
-            sampleTx={suggestion.sample}
+      {/* Smart Suggestion Deck */}
+      {/* We pass the array of suggestions. The Deck manages cycling. 
+          When we confirm, we remove from the list via fetch/refresh or local filter? 
+          For now, refreshing data is safer but slower. 
+      */}
+      {suggestions.length > 0 && (
+        <View style={{ marginTop: 10, marginBottom: 10, zIndex: 10 }}>
+          <SuggestionDeck
+            suggestions={suggestions}
             isUpdating={isUpdatingSuggestion}
-            selectedCategoryName={categories.find(c => c.id === editCategoryId)?.name}
-            onSelectCategory={() => {
+            categories={categories}
+            selectedCategoryId={editCategoryId}
+            onSelectCategory={(item) => {
+              setSuggestion(item);
               setEditCategoryId("");
               setCategoryModalVisible(true);
             }}
-            onDismiss={() => setSuggestion(null)}
             onConfirm={handleConfirmSuggestion}
-            onOpenDetails={() => navigation.navigate('SmartSuggestion', { name: suggestion.name, count: suggestion.count })}
+            onDismiss={(item) => {
+              setSuggestions(prev => prev.filter(s => s.name !== item.name));
+            }}
+            onOpenDetails={(item) => navigation.navigate('SmartSuggestion', { name: item.name, count: item.count })}
           />
         </View>
       )}
     </View>
-  ), [suggestion, categories, editCategoryId, isUpdatingSuggestion]);
+  ), [suggestions, categories, editCategoryId, isUpdatingSuggestion]);
 
   return (
     <View style={styles.container}>

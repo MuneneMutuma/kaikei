@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, Platform } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, Platform, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart, PieChart } from "react-native-gifted-charts";
@@ -27,6 +27,10 @@ const getCategoryColor = (name: string) => {
 type TimeFrame = 'week' | 'month' | 'last_month';
 
 export default function AnalyticsScreen() {
+    useEffect(() => {
+        fetchAnalytics(); // Fetch immediately on mount
+    }, []);
+
     const insets = useSafeAreaInsets();
     const [timeFrame, setTimeFrame] = useState<TimeFrame>('month');
     const [loading, setLoading] = useState(false);
@@ -37,8 +41,6 @@ export default function AnalyticsScreen() {
     const [trendData, setTrendData] = useState<any[]>([]);
     const [topCategory, setTopCategory] = useState<string>('');
 
-    const repo = useRef(new ExpenseRepository());
-
     const fetchAnalytics = async () => {
         setLoading(true);
         const now = new Date();
@@ -47,24 +49,45 @@ export default function AnalyticsScreen() {
 
         // Calculate Date Ranges
         if (timeFrame === 'week') {
-            const firstDay = new Date(now.setDate(now.getDate() - now.getDay())); // Sunday
-            startDate = firstDay.toISOString().split('T')[0];
-            endDate = new Date().toISOString().split('T')[0];
+            const start = new Date(now);
+            start.setDate(now.getDate() - now.getDay()); // Sunday
+            start.setHours(0, 0, 0, 0);
+            startDate = start.toISOString();
+
+            const end = new Date(now);
+            end.setHours(23, 59, 59, 999);
+            endDate = end.toISOString();
         } else if (timeFrame === 'month') {
-            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-            startDate = firstDay.toISOString().split('T')[0];
-            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            endDate = lastDay.toISOString().split('T')[0];
+            const start = new Date(now.getFullYear(), now.getMonth(), 1);
+            start.setHours(0, 0, 0, 0); // Local start of day
+
+            // Adjust for timezone offset to get correct UTC start if needed,
+            // but for now, toISOString() handles the shift.
+            // Better to rely on the fact that stored dates are ISO/UTC.
+            startDate = start.toISOString();
+
+            const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            end.setHours(23, 59, 59, 999);
+            endDate = end.toISOString();
         } else if (timeFrame === 'last_month') {
-            const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            startDate = firstDay.toISOString().split('T')[0];
-            const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
-            endDate = lastDay.toISOString().split('T')[0];
+            const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            start.setHours(0, 0, 0, 0);
+            startDate = start.toISOString();
+
+            const end = new Date(now.getFullYear(), now.getMonth(), 0);
+            end.setHours(23, 59, 59, 999);
+            endDate = end.toISOString();
         }
 
+
+
         try {
+            const repository = new ExpenseRepository(); // Force fresh instance
+
             // 1. Category Totals (for Donut)
-            const catTotals = await repo.current.getCategoryTotals(startDate, endDate);
+
+            const catTotals = await repository.getCategoryTotals(startDate, endDate);
+
 
             let sum = 0;
             const pieData = catTotals.map(c => {
@@ -81,7 +104,9 @@ export default function AnalyticsScreen() {
             if (pieData.length > 0) setTopCategory(pieData[0].name);
 
             // 2. Daily Trends (for Line Chart)
-            const daily = await repo.current.getDailyTotals(startDate, endDate);
+            const daily = await repository.getDailyTotals(startDate, endDate);
+
+
             // Map to gifted-charts format
             const lineData = daily.map(d => ({
                 value: d.total,
@@ -92,17 +117,17 @@ export default function AnalyticsScreen() {
             setTrendData(lineData);
 
         } catch (e) {
-            console.error(e);
+            console.error("[Analytics] Error:", e);
         } finally {
             setLoading(false);
         }
     };
 
-    useFocusEffect(
-        useCallback(() => {
-            fetchAnalytics();
-        }, [timeFrame])
-    );
+    // Re-fetch when timeFrame changes
+    useEffect(() => {
+
+        fetchAnalytics();
+    }, [timeFrame]);
 
     const renderLegend = () => {
         return (
