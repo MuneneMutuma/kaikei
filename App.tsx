@@ -6,6 +6,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Home, Lightbulb, User, PlusCircle, BarChart3 } from 'lucide-react-native';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 
 import SetupScreen from './src/screens/SetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -130,7 +131,7 @@ const MainTabs = () => {
         name="Analytics"
         component={AnalyticsScreen}
         options={{
-          tabBarLabel: 'Trends',
+          tabBarLabel: 'Analytics',
           tabBarIcon: ({ color, size }) => <BarChart3 color={color} size={size} />,
         }}
       />
@@ -177,40 +178,43 @@ const App = () => {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-        <NavigationContainer>
-          <Stack.Navigator initialRouteName={initialRoute}>
-            <Stack.Screen
-              name="Setup"
-              component={SetupScreen}
-              options={{ headerShown: false }}
-            />
-
-            {/* Main App Entry Point */}
-            <Stack.Screen
-              name="MainTabs"
-              component={MainTabs}
-              options={{ headerShown: false }}
-            />
-
-            {/* Modals & Full Screen Flows */}
-            <Stack.Screen
-              name="AddExpense"
-              component={AddExpenseScreen}
-              options={{ title: 'Add Expense' }}
-            />
-            <Stack.Screen
-              name="SmsReader"
-              component={SmsReaderScreen}
-              options={{ title: 'Import Transactions' }}
-            />
-            <Stack.Screen
-              name="SmartSuggestion"
-              component={SmartSuggestionScreen}
-              options={{ headerShown: false }}
-            />
-          </Stack.Navigator>
-        </NavigationContainer>
+        <BottomSheetModalProvider>
+          <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+          <NavigationContainer>
+            <Stack.Navigator initialRouteName={initialRoute}>
+              <Stack.Screen
+                name="Setup"
+                component={SetupScreen}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="MainTabs"
+                component={MainTabs}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="AddExpense"
+                component={AddExpenseScreen}
+                options={{ title: 'Add Expense' }}
+              />
+              <Stack.Screen
+                name="SmsReader"
+                component={SmsReaderScreen}
+                options={{ title: 'Import Transactions' }}
+              />
+              <Stack.Screen
+                name="SmartSuggestion"
+                component={SmartSuggestionScreen}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="ModelDownload"
+                component={ModelDownloadScreen}
+                options={{ headerShown: false }}
+              />
+            </Stack.Navigator>
+          </NavigationContainer>
+        </BottomSheetModalProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

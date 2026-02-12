@@ -75,7 +75,7 @@ export class ExpenseRepository {
             `SELECT e.*, c.name as categoryName 
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
-           WHERE e.date LIKE ? 
+           WHERE datetime(e.date, 'localtime') LIKE ? 
            AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
             ORDER BY e.date DESC`,
             [`${monthStr}%`]
@@ -295,7 +295,7 @@ export class ExpenseRepository {
             `SELECT e.*, c.name as categoryName 
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
-           WHERE e.date >= ? AND e.date <= ? AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+           WHERE datetime(e.date, 'localtime') >= ? AND datetime(e.date, 'localtime') <= ? AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
            ORDER BY e.date DESC`,
             [startDate, endDate]
         );
@@ -307,7 +307,7 @@ export class ExpenseRepository {
             `SELECT c.name, SUM(e.amount) as total
             FROM expenses e
             JOIN categories c ON e.categoryId = c.id
-            WHERE e.date >= ? AND e.date <= ? 
+            WHERE datetime(e.date, 'localtime') >= ? AND datetime(e.date, 'localtime') <= ? 
             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
             AND e.type = 'expense'
             GROUP BY c.id
@@ -320,9 +320,10 @@ export class ExpenseRepository {
     public async getDailyTotals(startDate: string, endDate: string): Promise<{ day: string; total: number }[]> {
         // SQLite: SUBSTR(date, 1, 10) extracts 'YYYY-MM-DD'
         const result = await this.db.execute(
-            `SELECT SUBSTR(date, 1, 10) as day, SUM(amount) as total
+            `SELECT SUBSTR(datetime(date, 'localtime'), 1, 10) as day, SUM(amount) as total
             FROM expenses
-            WHERE date >= ? AND date <= ? 
+            WHERE SUBSTR(datetime(date, 'localtime'), 1, 10) >= ? 
+            AND SUBSTR(datetime(date, 'localtime'), 1, 10) <= ?
             AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
             AND type = 'expense'
             GROUP BY day
@@ -330,6 +331,38 @@ export class ExpenseRepository {
             [startDate, endDate]
         );
         return Database.getRows(result) as { day: string; total: number }[];
+    }
+
+    public async getCategoryBreakdownForDate(date: string): Promise<{ total: number; categories: { name: string; total: number }[] }> {
+        // 1. Get total for the day
+        const totalResult = await this.db.execute(
+            `SELECT SUM(amount) as total
+            FROM expenses
+            WHERE SUBSTR(datetime(date, 'localtime'), 1, 10) = ?
+            AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
+            AND type = 'expense'`,
+            [date]
+        );
+        const total = (Database.getRows(totalResult)[0] as any)?.total || 0;
+
+        // 2. Get breakdown by category
+        // Fixed: Removed c.icon, c.color as they don't exist in DB
+        const result = await this.db.execute(
+            `SELECT c.name, SUM(e.amount) as total
+            FROM expenses e
+            JOIN categories c ON e.categoryId = c.id
+            WHERE SUBSTR(datetime(e.date, 'localtime'), 1, 10) = ?
+            AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+            AND e.type = 'expense'
+            GROUP BY c.id
+            ORDER BY total DESC
+            LIMIT 5`,
+            [date]
+        );
+
+        const categories = Database.getRows(result) as { name: string; total: number }[];
+
+        return { total, categories };
     }
 
     public getUncategorizedExpenses(limit: number = 20): Expense[] {
@@ -416,7 +449,7 @@ export class ExpenseRepository {
         const expensesResult = await this.db.execute(
             `SELECT type, SUM(amount) as total 
              FROM expenses 
-             WHERE date LIKE ? 
+             WHERE datetime(date, 'localtime') LIKE ? 
              AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
              GROUP BY type`,
             [`${monthStr}%`]
@@ -436,7 +469,7 @@ export class ExpenseRepository {
             `SELECT c.name, SUM(e.amount) as total
              FROM expenses e
              JOIN categories c ON e.categoryId = c.id
-             WHERE e.date LIKE ? 
+             WHERE datetime(e.date, 'localtime') LIKE ? 
              AND e.type = 'expense'
              AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
              GROUP BY c.name
@@ -457,4 +490,42 @@ export class ExpenseRepository {
         };
     }
 
+    /**
+     * Get Daily Breakdowns for a Date Range (Batch Fetch for Tooltip)
+     * Returns a map: { "YYYY-MM-DD": [ { name, amount, color } ] }
+     */
+    public async getDailyBreakdownInRange(startDate: string, endDate: string): Promise<Record<string, { name: string; amount: number; color: string }[]>> {
+        const result = await this.db.execute(
+            `SELECT 
+                SUBSTR(datetime(e.date, 'localtime'), 1, 10) as day,
+                COALESCE(c.name, 'Uncategorized') as name, 
+                SUM(e.amount) as total
+             FROM expenses e
+             LEFT JOIN categories c ON e.categoryId = c.id
+             WHERE SUBSTR(datetime(e.date, 'localtime'), 1, 10) >= ? 
+             AND SUBSTR(datetime(e.date, 'localtime'), 1, 10) <= ?
+             AND e.type = 'expense'
+             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+             GROUP BY day, c.id
+             ORDER BY day ASC, total DESC`,
+            [startDate, endDate + 'T23:59:59']
+        );
+
+        const rows = Database.getRows(result);
+        const map: Record<string, { name: string; amount: number; color: string }[]> = {};
+
+        rows.forEach((r: any) => {
+            if (!map[r.day]) map[r.day] = [];
+            // Limit to top 3 per day here to save memory, or client side?
+            // Doing it here saves JS processing time if the query returns many rows.
+            // Limit removed for prototype visualization
+            map[r.day].push({
+                name: r.name,
+                amount: r.total,
+                color: '#4682B4' // Default SteelBlue, replaced in UI
+            });
+        });
+
+        return map;
+    }
 }
