@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Switch, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Switch, Alert, NativeModules, Linking, PermissionsAndroid } from 'react-native';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell, Save } from 'lucide-react-native';
+import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell, Save, Download, Smartphone, Zap, Battery, CheckCircle, AlertTriangle } from 'lucide-react-native';
 import { BackupService } from '../services/backup/BackupService';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
+import { SettingsRepository } from '../services/settings/SettingsRepository';
+import { IngestionService } from '../services/ingestion/IngestionService';
 
 import { BackupModal } from '../components/BackupModal';
+import { RestorePickerModal } from '../components/RestorePickerModal';
+import { BackupFile } from '../services/backup/BackupService';
+
+const { SmsListenerModule } = NativeModules;
 
 export default function ProfileScreen() {
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -18,13 +24,22 @@ export default function ProfileScreen() {
     const [backupModalVisible, setBackupModalVisible] = useState(false);
     const [backupPath, setBackupPath] = useState<string | undefined>(undefined);
     const [backupError, setBackupError] = useState<string | undefined>(undefined);
+    const [backupMode, setBackupMode] = useState<'export' | 'restore'>('export');
+    const [restoreCounts, setRestoreCounts] = useState<{ expenses: number; categories: number; settings: number; ignored: number } | undefined>(undefined);
+    const [restorePickerVisible, setRestorePickerVisible] = useState(false);
+
+    // Auto-Import State
+    const [autoImportEnabled, setAutoImportEnabled] = useState(false);
+    const [alwaysOnEnabled, setAlwaysOnEnabled] = useState(false);
+    const [smsPermissionOk, setSmsPermissionOk] = useState(false);
+    const [notificationAccessOk, setNotificationAccessOk] = useState(false);
+    const [batteryOptimized, setBatteryOptimized] = useState(true); // true = BAD (optimized = killed)
+    const settingsRepo = React.useMemo(() => new SettingsRepository(), []);
 
     React.useEffect(() => {
         const loadProfile = async () => {
             try {
-                const { SettingsRepository } = require('../services/settings/SettingsRepository');
-                const settings = new SettingsRepository();
-                const data = await settings.getUserSettings();
+                const data = await settingsRepo.getUserSettings();
                 setUserProfile({
                     name: data.userName || 'User',
                     persona: data.userPersona || 'Standard',
@@ -37,7 +52,111 @@ export default function ProfileScreen() {
         loadProfile();
     }, []);
 
+    // Load auto-import settings and check permissions
+    const refreshHealthCheck = useCallback(async () => {
+        try {
+            const autoEnabled = await settingsRepo.isAutoImportEnabled();
+            const alwaysOn = await settingsRepo.isAlwaysOnEnabled();
+            setAutoImportEnabled(autoEnabled);
+            setAlwaysOnEnabled(alwaysOn);
+
+            // Check SMS permission
+            const smsGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_SMS);
+            setSmsPermissionOk(smsGranted);
+
+            // Check notification access (via native module)
+            if (SmsListenerModule?.isNotificationAccessEnabled) {
+                try {
+                    const notifOk = await SmsListenerModule.isNotificationAccessEnabled();
+                    setNotificationAccessOk(notifOk);
+                } catch {
+                    setNotificationAccessOk(false);
+                }
+            }
+
+            // Check battery optimization
+            if (SmsListenerModule?.isIgnoringBatteryOptimizations) {
+                try {
+                    const ignoring = await SmsListenerModule.isIgnoringBatteryOptimizations();
+                    setBatteryOptimized(!ignoring); // true means NOT ignoring = BAD
+                } catch {
+                    setBatteryOptimized(true);
+                }
+            }
+        } catch (e) {
+            console.warn('Health check error:', e);
+        }
+    }, [settingsRepo]);
+
+    useEffect(() => {
+        refreshHealthCheck();
+    }, [refreshHealthCheck]);
+
+    const handleAutoImportToggle = async (enabled: boolean) => {
+        if (enabled) {
+            // Request SMS permission first
+            const result = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.READ_SMS,
+                {
+                    title: 'SMS Permission',
+                    message: 'Kaikei needs SMS access to auto-import your M-Pesa transactions.',
+                    buttonPositive: 'Allow',
+                    buttonNegative: 'Deny',
+                }
+            );
+            if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+                Alert.alert('Permission Required', 'SMS access is needed to auto-import M-Pesa transactions.');
+                return;
+            }
+            setSmsPermissionOk(true);
+        }
+
+        setAutoImportEnabled(enabled);
+        await settingsRepo.setAutoImportEnabled(enabled);
+
+        if (enabled) {
+            await IngestionService.start();
+        } else {
+            IngestionService.stop();
+            // Also disable always-on if auto-import is turned off
+            if (alwaysOnEnabled) {
+                setAlwaysOnEnabled(false);
+                await settingsRepo.setAlwaysOnEnabled(false);
+            }
+        }
+    };
+
+    const handleAlwaysOnToggle = async (enabled: boolean) => {
+        if (enabled) {
+            // Open notification access settings
+            try {
+                SmsListenerModule?.openNotificationSettings?.();
+            } catch {
+                Linking.openSettings();
+            }
+            Alert.alert(
+                'Enable Notification Access',
+                'Find "Kaikei" in the list and enable it. This allows detection even when the app is closed.',
+                [{ text: 'OK', onPress: () => refreshHealthCheck() }]
+            );
+        }
+
+        setAlwaysOnEnabled(enabled);
+        await settingsRepo.setAlwaysOnEnabled(enabled);
+    };
+
+    const handleFixBattery = async () => {
+        try {
+            SmsListenerModule?.requestBatteryOptimizationExemption?.();
+        } catch {
+            Linking.openSettings();
+        }
+        setTimeout(refreshHealthCheck, 2000);
+    };
+
     const handleBackup = async () => {
+        setBackupMode('export');
+        setRestoreCounts(undefined);
         const backupService = new BackupService();
         const result = await backupService.createBackup();
 
@@ -49,6 +168,40 @@ export default function ProfileScreen() {
             setBackupPath(undefined);
         }
         setBackupModalVisible(true);
+    };
+
+    const handleRestore = () => {
+        setRestorePickerVisible(true);
+    };
+
+    const handleRestoreFileSelected = (file: BackupFile) => {
+        setRestorePickerVisible(false);
+        Alert.alert(
+            'Restore Data',
+            `This will REPLACE all current data with:\n\n${file.name}\n\nThis cannot be undone. Are you sure?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Restore',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setBackupMode('restore');
+                        setBackupPath(undefined);
+                        const backupService = new BackupService();
+                        const result = await backupService.restoreFromFile(file.path);
+
+                        if (result.success) {
+                            setRestoreCounts(result.counts);
+                            setBackupError(undefined);
+                        } else {
+                            setRestoreCounts(undefined);
+                            setBackupError(result.error || 'Restore failed.');
+                        }
+                        setBackupModalVisible(true);
+                    },
+                },
+            ]
+        );
     };
 
     const handleDeleteAll = async () => {
@@ -86,6 +239,10 @@ export default function ProfileScreen() {
         </TouchableOpacity>
     );
 
+    const StatusIcon = ({ ok }: { ok: boolean }) => ok
+        ? <CheckCircle size={16} color={colors.success} />
+        : <AlertTriangle size={16} color="#F59E0B" />;
+
     return (
         <View style={styles.container}>
             <ScreenHeader title="My Profile" subtitle="Account Settings" showNotification={false} />
@@ -109,6 +266,101 @@ export default function ProfileScreen() {
                     {renderMenuItem(<CreditCard size={20} color={colors.primary} />, "Payment Methods", "M-Pesa")}
                 </View>
 
+                {/* Section: M-Pesa Auto-Import */}
+                <Text style={styles.sectionTitle}>M-Pesa Auto-Import</Text>
+                <View style={styles.section}>
+                    {/* Main Toggle */}
+                    <View style={styles.menuItem}>
+                        <View style={styles.menuIconContainer}>
+                            <Smartphone size={20} color={colors.primary} />
+                        </View>
+                        <View style={styles.menuTextContainer}>
+                            <Text style={styles.menuLabel}>Auto-Import Transactions</Text>
+                            <Text style={styles.menuSubLabel}>Detect & import M-Pesa SMS</Text>
+                        </View>
+                        <Switch
+                            value={autoImportEnabled}
+                            onValueChange={handleAutoImportToggle}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={'white'}
+                        />
+                    </View>
+
+                    {/* Health Check (only visible when auto-import is ON) */}
+                    {autoImportEnabled && (
+                        <>
+                            {/* SMS Permission Status */}
+                            <View style={styles.healthRow}>
+                                <StatusIcon ok={smsPermissionOk} />
+                                <Text style={styles.healthLabel}>SMS Permission</Text>
+                                <Text style={[styles.healthValue, { color: smsPermissionOk ? colors.success : '#F59E0B' }]}>
+                                    {smsPermissionOk ? 'Granted' : 'Required'}
+                                </Text>
+                            </View>
+
+                            {/* Runtime Detection Status */}
+                            <View style={styles.healthRow}>
+                                <StatusIcon ok={autoImportEnabled} />
+                                <Text style={styles.healthLabel}>Runtime Detection</Text>
+                                <Text style={[styles.healthValue, { color: colors.success }]}>Active</Text>
+                            </View>
+
+                            {/* Always-On Toggle */}
+                            <View style={[styles.menuItem, { paddingLeft: 32 }]}>
+                                <View style={styles.menuIconContainer}>
+                                    <Zap size={20} color={alwaysOnEnabled ? colors.primary : colors.textSecondary} />
+                                </View>
+                                <View style={styles.menuTextContainer}>
+                                    <Text style={styles.menuLabel}>Always-On Detection</Text>
+                                    <Text style={styles.menuSubLabel}>Works even when app is closed</Text>
+                                </View>
+                                <Switch
+                                    value={alwaysOnEnabled}
+                                    onValueChange={handleAlwaysOnToggle}
+                                    trackColor={{ false: '#767577', true: colors.primary }}
+                                    thumbColor={'white'}
+                                />
+                            </View>
+
+                            {/* Always-On Health (only when enabled) */}
+                            {alwaysOnEnabled && (
+                                <>
+                                    <View style={styles.healthRow}>
+                                        <StatusIcon ok={notificationAccessOk} />
+                                        <Text style={styles.healthLabel}>Notification Access</Text>
+                                        {notificationAccessOk ? (
+                                            <Text style={[styles.healthValue, { color: colors.success }]}>Enabled</Text>
+                                        ) : (
+                                            <TouchableOpacity onPress={() => SmsListenerModule?.openNotificationSettings?.()}>
+                                                <Text style={[styles.healthValue, { color: '#F59E0B' }]}>Tap to enable</Text>
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
+
+                                    <View style={styles.healthRow}>
+                                        <StatusIcon ok={!batteryOptimized} />
+                                        <Text style={styles.healthLabel}>Battery Optimization</Text>
+                                        {!batteryOptimized ? (
+                                            <Text style={[styles.healthValue, { color: colors.success }]}>Exempt</Text>
+                                        ) : (
+                                            <TouchableOpacity onPress={handleFixBattery}>
+                                                <Text style={[styles.healthValue, { color: '#F59E0B' }]}>Tap to fix</Text>
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
+                                </>
+                            )}
+
+                            {/* Catch-up Scan Status */}
+                            <View style={styles.healthRow}>
+                                <StatusIcon ok={true} />
+                                <Text style={styles.healthLabel}>Catch-up Scan</Text>
+                                <Text style={[styles.healthValue, { color: colors.success }]}>Active on launch</Text>
+                            </View>
+                        </>
+                    )}
+                </View>
+
                 {/* Section: Settings */}
                 <Text style={styles.sectionTitle}>Settings</Text>
                 <View style={styles.section}>
@@ -121,6 +373,19 @@ export default function ProfileScreen() {
                             </View>
                             <View style={styles.menuTextContainer}>
                                 <Text style={styles.menuLabel}>Export Data (Backup)</Text>
+                            </View>
+                            <View style={styles.menuRight}>
+                                <ChevronRight size={20} color={colors.textSecondary} />
+                            </View>
+                        </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={handleRestore}>
+                        <View style={styles.menuItem}>
+                            <View style={styles.menuIconContainer}>
+                                <Download size={20} color={colors.primary} />
+                            </View>
+                            <View style={styles.menuTextContainer}>
+                                <Text style={styles.menuLabel}>Restore Data</Text>
                             </View>
                             <View style={styles.menuRight}>
                                 <ChevronRight size={20} color={colors.textSecondary} />
@@ -178,6 +443,13 @@ export default function ProfileScreen() {
                 onClose={() => setBackupModalVisible(false)}
                 filePath={backupPath}
                 error={backupError}
+                mode={backupMode}
+                restoreCounts={restoreCounts}
+            />
+            <RestorePickerModal
+                visible={restorePickerVisible}
+                onClose={() => setRestorePickerVisible(false)}
+                onSelect={handleRestoreFileSelected}
             />
         </View>
     );
@@ -348,5 +620,30 @@ const styles = StyleSheet.create({
     modalBtnTextDelete: {
         color: 'white',
         fontWeight: '600'
-    }
+    },
+    // Auto-Import Health Check
+    menuSubLabel: {
+        ...typography.caption,
+        color: colors.textSecondary,
+        marginTop: 2,
+    },
+    healthRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        marginLeft: 32,
+    },
+    healthLabel: {
+        ...typography.body,
+        fontSize: 13,
+        color: colors.textSecondary,
+        flex: 1,
+        marginLeft: 8,
+    },
+    healthValue: {
+        ...typography.caption,
+        fontWeight: '600',
+        fontSize: 12,
+    },
 });

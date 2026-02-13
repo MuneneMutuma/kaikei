@@ -14,6 +14,7 @@ import { SmartOnboardingService, PayeeCandidate } from "../services/intelligence
 import HomeHeader from "../components/HomeHeader";
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
+import { IngestionEvents, INGESTION_EVENT } from "../services/ingestion/IngestionEvents";
 
 const getCategoryIcon = (name: string) => {
   switch (name?.toLowerCase()) {
@@ -253,6 +254,26 @@ export default function HomeScreen({ route, navigation }: any) {
       unsub();
     };
   }, []);
+
+  // Subscribe to auto-ingestion events for live refresh
+  useEffect(() => {
+    const unsubTx = IngestionEvents.on(INGESTION_EVENT.TRANSACTION_INGESTED, () => {
+      console.log('[HomeScreen] Auto-ingested transaction detected, refreshing...');
+      setLastDataHash(''); // Force hash mismatch to trigger re-render
+      fetchData();
+    });
+    const unsubCatchUp = IngestionEvents.on(INGESTION_EVENT.CATCH_UP_COMPLETE, (result: any) => {
+      if (result?.imported > 0) {
+        console.log(`[HomeScreen] Catch-up imported ${result.imported} transactions, refreshing...`);
+        setLastDataHash('');
+        fetchData();
+      }
+    });
+    return () => {
+      unsubTx();
+      unsubCatchUp();
+    };
+  }, [fetchData]);
 
   // 5. Renderers
   const renderItem = useCallback(({ item, index }: { item: Expense, index: number }) => {

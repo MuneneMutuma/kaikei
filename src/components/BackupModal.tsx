@@ -8,9 +8,11 @@ interface BackupModalProps {
     onClose: () => void;
     filePath?: string;
     error?: string;
+    mode?: 'export' | 'restore';
+    restoreCounts?: { expenses: number; categories: number; settings: number; ignored: number };
 }
 
-export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, filePath, error }) => {
+export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, filePath, error, mode = 'export', restoreCounts }) => {
 
     const handleShare = async () => {
         if (!filePath) return;
@@ -25,6 +27,12 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
         }
     };
 
+    const isRestore = mode === 'restore';
+    const headerColor = error ? colors.danger : colors.success;
+    const headerTitle = error
+        ? (isRestore ? 'Restore Failed' : 'Backup Failed')
+        : (isRestore ? 'Restore Complete' : 'Backup Complete');
+
     return (
         <Modal
             visible={visible}
@@ -35,9 +43,9 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
             <View style={styles.overlay}>
                 <View style={styles.card}>
                     {/* Header */}
-                    <View style={[styles.header, { backgroundColor: error ? colors.danger : colors.success }]}>
+                    <View style={[styles.header, { backgroundColor: headerColor }]}>
                         <Text style={styles.headerTitle}>
-                            {error ? 'Backup Failed' : 'Backup Complete'}
+                            {headerTitle}
                         </Text>
                     </View>
 
@@ -45,6 +53,24 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
                     <View style={styles.content}>
                         {error ? (
                             <Text style={styles.text}>{error}</Text>
+                        ) : isRestore ? (
+                            <>
+                                <Text style={styles.text}>Your data has been restored successfully.</Text>
+                                {restoreCounts && (
+                                    <View style={styles.pathContainer}>
+                                        <Text style={styles.label}>Restored:</Text>
+                                        <Text style={styles.countRow}>📊 {restoreCounts.expenses} expenses</Text>
+                                        <Text style={styles.countRow}>📁 {restoreCounts.categories} categories</Text>
+                                        <Text style={styles.countRow}>⚙️ {restoreCounts.settings} settings</Text>
+                                        {restoreCounts.ignored > 0 && (
+                                            <Text style={styles.countRow}>🚫 {restoreCounts.ignored} ignored transactions</Text>
+                                        )}
+                                    </View>
+                                )}
+                                <Text style={styles.hint}>
+                                    Restart the app for all changes to take effect.
+                                </Text>
+                            </>
                         ) : (
                             <>
                                 <Text style={styles.text}>Your data has been securely exported.</Text>
@@ -61,7 +87,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
 
                     {/* Actions */}
                     <View style={styles.footer}>
-                        {!error && filePath && (
+                        {!error && !isRestore && filePath && (
                             <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleShare}>
                                 <Text style={styles.buttonTextPrimary}>Share / Open</Text>
                             </TouchableOpacity>
@@ -79,7 +105,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)', // Glass backdrop
+        backgroundColor: 'rgba(0,0,0,0.6)',
         justifyContent: 'center',
         alignItems: 'center',
         padding: spacing.lg,
@@ -90,7 +116,6 @@ const styles = StyleSheet.create({
         backgroundColor: colors.surface,
         borderRadius: 20,
         overflow: 'hidden',
-        // Shadow
         elevation: 10,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
@@ -127,12 +152,17 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: colors.textSecondary,
         fontWeight: '600',
-        marginBottom: 2,
+        marginBottom: 4,
     },
     path: {
         fontSize: 13,
         color: colors.primary,
         fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    countRow: {
+        fontSize: 14,
+        color: colors.text,
+        paddingVertical: 2,
     },
     hint: {
         fontSize: 14,

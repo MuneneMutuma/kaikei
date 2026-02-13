@@ -23,38 +23,9 @@ import { Database } from "../services/ledger/Database";
 import { Category, Expense } from "../services/ledger/Schema";
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
+import { TransactionImporter, parseMpesaDate } from "../services/ingestion/TransactionImporter";
 
-const parseMpesaDate = (dateStr: string, timeStr?: string): string => {
-  try {
-    const [day, month, yearPart] = dateStr.split('/').map(Number);
-    const year = yearPart < 100 ? 2000 + yearPart : yearPart;
-
-    let hours = 12;
-    let minutes = 0;
-
-    if (timeStr) {
-      // Format: "10:45 PM" or "9:30 AM" or "14:00"
-      const promptMatch = timeStr.match(/(\d+):(\d+)\s?(AM|PM)?/i);
-      if (promptMatch) {
-        let h = parseInt(promptMatch[1], 10);
-        const m = parseInt(promptMatch[2], 10);
-        const meridiem = promptMatch[3]?.toUpperCase();
-
-        if (meridiem === 'PM' && h < 12) h += 12;
-        if (meridiem === 'AM' && h === 12) h = 0;
-
-        hours = h;
-        minutes = m;
-      }
-    }
-
-    const date = new Date(year, month - 1, day, hours, minutes, 0);
-    if (isNaN(date.getTime())) throw new Error("Invalid date");
-    return date.toISOString();
-  } catch (e) {
-    return new Date().toISOString();
-  }
-};
+// parseMpesaDate is now imported from TransactionImporter
 
 export default function SMSReaderScreen() {
   const insets = useSafeAreaInsets();
@@ -79,6 +50,7 @@ export default function SMSReaderScreen() {
 
   const repo = useRef(new ExpenseRepository());
   const parser = useRef(new NaturalLanguageParser());
+  const importer = useRef(new TransactionImporter());
 
   useEffect(() => {
     Database.init();
@@ -199,117 +171,18 @@ export default function SMSReaderScreen() {
   };
 
   const performBulkImport = async (candidates: MpesaTransaction[]) => {
-    let count = 0;
-    // Process in chunks to yield UI? JS is single threaded but we can use setTimeout or just await.
-    // Await inside loop yields to microtasks, but not necessarily rendering if synchronous DB calls are heavy.
-    // SQLite is async-ish (bridge).
+    const result = await importer.current.importBatch(candidates, 'manual');
 
-    // We try to find 'Other' or 'General' or just take the first one available.
-    let otherCategory = await repo.current.getCategoryByName('Other');
-
-    if (!otherCategory) {
-      // Fallback to any category
-      const allCats = await repo.current.getAllCategories();
-      if (allCats.length > 0) {
-        otherCategory = allCats[0];
-        console.log(`[SmsReader] 'Other' not found, falling back to '${otherCategory.name}'`);
-      } else {
-        // This is critical: DB has no categories at all.
-        console.warn("[SmsReader] No categories found in DB! Seeding 'Other' as last resort.");
-        try {
-          otherCategory = await repo.current.addCategory('Other', false);
-        } catch (e) {
-          console.error("Failed to seed Other category:", e);
-          Alert.alert("Error", "No categories found and failed to create one. Please restart app.");
-          setLoading(false);
-          return;
-        }
-      }
-    }
-    const otherCategoryId = otherCategory.id;
-
-    for (const tx of candidates) {
-      try {
-        // Re-use logic (abstracted ideally, but copying for safety/speed now)
-        // 1. Predict Category (Fast Regex)
-        const descriptionToParse = `${tx.from} ${tx.to} ${tx.type} `;
-        const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
-
-        let targetCatId = 'unknown_cat';
-        if (categorySuggestion?.id) {
-          targetCatId = categorySuggestion.id;
-        } else {
-          // Check for 'Other' again implicitly or use the one we found above
-          const fallbackOther = await repo.current.getCategoryByName('Other');
-          targetCatId = fallbackOther?.id || otherCategoryId || 'unknown_cat';
-        }
-
-        const categoryId = targetCatId;
-
-        const cleanDesc = tx.direction === 'in'
-          ? `Received from ${tx.from} `
-          : `Paid to ${tx.to || tx.account || 'Unknown'} `;
-
-        // NEW: Check internal
-        const isInternal = tx.type === 'internal' || tx.direction === 'internal';
-
-        // Determine Type (Income/Expense/Transfer)
-        let type: 'income' | 'expense' | 'transfer' = 'expense';
-        if (isInternal) {
-          type = 'transfer';
-        } else if (tx.direction === 'in') {
-          type = 'income';
-        } else if (tx.type === 'transfer') {
-          type = 'transfer';
-        }
-
-        // Handle Transfer specifics
-        if (type === 'transfer') {
-          // If manual transfer, check sender/recip
-          if (tx.from?.toUpperCase() === 'M-PESA') {
-            // Outgoing transfer (M-Pesa -> Pochi)
-            // Keeping it as 'transfer' essentially hides it from Expense/Income totals
-          }
-        }
-
-        // Determine Sender / Recipient
-        let sender = 'Unknown';
-        let recipient = 'Unknown';
-
-        if (type === 'income') {
-          sender = tx.from;
-          recipient = 'M-PESA'; // Or 'You'
-        } else {
-          sender = 'M-PESA'; // Or 'You'
-          recipient = tx.to || tx.account || 'Unknown';
-        }
-
-        // 2. Add to Ledger
-        await repo.current.addExpense({
-          amount: tx.amount,
-          date: parseMpesaDate(tx.date, tx.time),
-          description: cleanDesc,
-          categoryId: categoryId,
-          source: 'mpesa',
-          rawText: tx.raw_text,
-          transactionId: tx.tx_id,
-          excludeFromAnalytics: isInternal, // Prevent double counting for internal moves
-          type: type,
-          sender: sender,
-          recipient: recipient
-        });
-        count++;
-      } catch (e) {
-        console.error("Failed to import", tx.tx_id, e);
-      }
-    }
-
-    // Update State Once
+    // Update synced state
     const newSynced = new Set(syncedTxIds);
-    candidates.forEach(c => newSynced.add(c.tx_id));
+    result.results.forEach(r => {
+      if (r.success && !r.skipped) {
+        newSynced.add(r.transactionId);
+      }
+    });
     setSyncedTxIds(newSynced);
     setLoading(false);
-    Alert.alert("Success", `Imported ${count} transactions.`);
+    Alert.alert("Success", `Imported ${result.imported} transactions.`);
   };
 
   const openDetails = (tx: MpesaTransaction) => {
@@ -321,11 +194,7 @@ export default function SMSReaderScreen() {
 
   const handleToggleBusiness = async (item: MpesaTransaction) => {
     if (syncedTxIds.has(item.tx_id)) {
-      // If already synced, maybe we want to un-sync? (Delete)
-      // For now, assume toggle off = delete?
-      // User requested "Select All" -> Import.
-      // Usually toggle means On/Off.
-      // Let's implement Delete for completeness if safe.
+      // Already imported — offer delete
       Alert.alert("Actions", "Transaction already imported. Delete?", [
         { text: "Cancel", style: "cancel" },
         {
@@ -340,34 +209,15 @@ export default function SMSReaderScreen() {
       return;
     }
 
-    // Import
+    // Import single transaction via shared importer
     try {
-      const descriptionToParse = `${item.from} ${item.to} ${item.type} `;
-      const categorySuggestion = await parser.current.predictCategory(descriptionToParse);
-      const categoryId = categorySuggestion?.id || repo.current.getCategoryByName('Other')?.id || 'unknown_cat';
+      const result = await importer.current.importTransaction(item, 'manual');
 
-      const cleanDesc = item.direction === 'in'
-        ? `Received from ${item.from} `
-        : `Paid to ${item.to || item.account || 'Unknown'} `;
-
-      const isInternal = item.type === 'internal' || item.direction === 'internal';
-
-      await repo.current.addExpense({
-        amount: item.amount,
-        date: parseMpesaDate(item.date, item.time),
-        description: cleanDesc,
-        categoryId: categoryId,
-        source: 'mpesa',
-        rawText: item.raw_text,
-        transactionId: item.tx_id,
-        excludeFromAnalytics: isInternal, // Prevent double counting for internal moves
-        type: type // Explicitly set type
-      });
-
-      // Update Set
-      const next = new Set(syncedTxIds);
-      next.add(item.tx_id);
-      setSyncedTxIds(next);
+      if (result.success && !result.skipped) {
+        const next = new Set(syncedTxIds);
+        next.add(item.tx_id);
+        setSyncedTxIds(next);
+      }
 
       // If it was ignored, unignore
       if (ignoredTxIds.has(item.tx_id)) {
@@ -376,7 +226,6 @@ export default function SMSReaderScreen() {
         nextIgnored.delete(item.tx_id);
         setIgnoredTxIds(nextIgnored);
       }
-
     } catch (e) {
       console.error(e);
       Alert.alert("Error", "Failed to import.");

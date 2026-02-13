@@ -291,14 +291,12 @@ export default function AnalyticsScreen() {
                 amount: d.total || 0,
                 breakdown: breakdownMap[d.day] || [], // Inject Breakdown Data
 
-                // No onPress here! This keeps scrolling smooth.
-                // Interaction handled via Pointer Tooltip.
+                // Tap-to-drawer interaction
                 onPress: () => handlePointPress({ label: d.day, value: d.total || 0, date: d.day, breakdown: breakdownMap[d.day] || [] }),
 
                 labelTextStyle: { color: colors.textSecondary, fontSize: 10, width: 30, textAlign: 'center' },
-                // Visual Hit-Box
                 dataPointRadius: 6,
-                dataPointColor: colors.primary
+                dataPointColor: colors.primary,
             }));
 
             console.log(`[Analytics] Line Data Points: ${lineData.length}`, lineData[0], lineData[lineData.length - 1]);
@@ -510,7 +508,7 @@ export default function AnalyticsScreen() {
                                         data={trendData}
                                         color={colors.primary}
                                         thickness={3}
-                                        dataPointsColor={colors.primary}
+
                                         startFillColor={colors.primary}
                                         endFillColor={colors.primary}
                                         startOpacity={0.2}
@@ -549,10 +547,11 @@ export default function AnalyticsScreen() {
                                         curveType={1} // Monotone Cubic - prevents overshoots
                                         isAnimated={false} // Disable animation to stop the "hanging line" logic
                                         areaChart
-                                        // Touch Conflict: Handled by individual points
+                                        // Touch: per-item onPress (doesn't interfere with scroll)
                                         onPress={undefined}
-                                        focusEnabled={false} // Allow ScrollView to win touch events
-                                        dataPointsRadius={6}
+                                        focusEnabled={false}
+                                        dataPointsRadius={10}
+                                        dataPointsColor={colors.primary}
                                         // @ts-ignore — TEST: disable pointer to test tap-to-drawer
                                         pointerConfig={false && {
                                             activatePointersOnLongPress: true,

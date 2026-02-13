@@ -71,4 +71,24 @@ export class SettingsRepository {
         const val = await this.getValue('onboarding_complete');
         return val === 'true';
     }
+
+    // --- Auto-Import Settings ---
+
+    public async isAutoImportEnabled(): Promise<boolean> {
+        const val = await this.getValue('auto_import_enabled');
+        return val === 'true';
+    }
+
+    public async setAutoImportEnabled(enabled: boolean): Promise<void> {
+        await this.setValue('auto_import_enabled', enabled ? 'true' : 'false');
+    }
+
+    public async isAlwaysOnEnabled(): Promise<boolean> {
+        const val = await this.getValue('always_on_enabled');
+        return val === 'true';
+    }
+
+    public async setAlwaysOnEnabled(enabled: boolean): Promise<void> {
+        await this.setValue('always_on_enabled', enabled ? 'true' : 'false');
+    }
 }

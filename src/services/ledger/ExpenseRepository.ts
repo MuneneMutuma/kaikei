@@ -395,7 +395,7 @@ export class ExpenseRepository {
     }
 
     /**
-     * Export all data for backup
+     * Export all data for backup — complete DB dump
      */
     public async exportDataAsJSON(): Promise<string> {
         const expensesResult = await this.db.execute('SELECT * FROM expenses');
@@ -404,7 +404,100 @@ export class ExpenseRepository {
         const categoriesResult = await this.db.execute('SELECT * FROM categories');
         const categories = Database.getRows(categoriesResult);
 
-        return JSON.stringify({ expenses, categories }, null, 2);
+        const settingsResult = await this.db.execute('SELECT * FROM settings');
+        const settings = Database.getRows(settingsResult);
+
+        const ignoredResult = await this.db.execute('SELECT * FROM ignored_transactions');
+        const ignored_transactions = Database.getRows(ignoredResult);
+
+        return JSON.stringify({
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            expenses,
+            categories,
+            settings,
+            ignored_transactions,
+        }, null, 2);
+    }
+
+    /**
+     * Import data from a JSON backup — full restore.
+     * Clears all existing data and replaces with the backup.
+     */
+    public async importDataFromJSON(json: string): Promise<{ expenses: number; categories: number; settings: number; ignored: number }> {
+        const data = JSON.parse(json);
+
+        // Validate structure
+        if (!data.expenses || !data.categories) {
+            throw new Error('Invalid backup file: missing expenses or categories.');
+        }
+
+        const db = this.db;
+
+        try {
+            db.execute('BEGIN TRANSACTION');
+
+            // 1. Clear all tables (children first due to FK)
+            db.execute('DELETE FROM expenses');
+            db.execute('DELETE FROM ignored_transactions');
+            db.execute('DELETE FROM settings');
+            db.execute('DELETE FROM categories');
+
+            // 2. Insert categories first (FK dependency for expenses)
+            for (const cat of data.categories) {
+                db.execute(
+                    'INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)',
+                    [cat.id, cat.name, cat.keywords, cat.budgetLimit ?? null, cat.isCustom ?? 0]
+                );
+            }
+
+            // 3. Insert expenses
+            for (const exp of data.expenses) {
+                db.execute(
+                    `INSERT INTO expenses (id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        exp.id, exp.amount, exp.date, exp.description ?? null,
+                        exp.categoryId, exp.source, exp.rawText ?? null,
+                        exp.transactionId ?? null, exp.excludeFromAnalytics ?? 0,
+                        exp.type ?? 'expense', exp.sender ?? null, exp.recipient ?? null,
+                        exp.isVerified ?? 0, exp.synced ?? 0,
+                    ]
+                );
+            }
+
+            // 4. Insert settings (if present)
+            if (Array.isArray(data.settings)) {
+                for (const setting of data.settings) {
+                    db.execute(
+                        'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
+                        [setting.key, setting.value]
+                    );
+                }
+            }
+
+            // 5. Insert ignored transactions (if present)
+            if (Array.isArray(data.ignored_transactions)) {
+                for (const ig of data.ignored_transactions) {
+                    db.execute(
+                        'INSERT OR IGNORE INTO ignored_transactions (transactionId) VALUES (?)',
+                        [ig.transactionId]
+                    );
+                }
+            }
+
+            db.execute('COMMIT');
+
+            return {
+                expenses: data.expenses.length,
+                categories: data.categories.length,
+                settings: data.settings?.length ?? 0,
+                ignored: data.ignored_transactions?.length ?? 0,
+            };
+        } catch (e) {
+            db.execute('ROLLBACK');
+            throw e;
+        }
     }
 
     /**

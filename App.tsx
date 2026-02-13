@@ -20,6 +20,8 @@ import { Database } from './src/services/ledger/Database';
 import { colors } from './src/theme/colors';
 import ProfileScreen from './src/screens/ProfileScreen';
 import { SettingsRepository } from './src/services/settings/SettingsRepository';
+// Import IngestionService at module scope so Headless JS task is registered immediately
+import { IngestionService } from './src/services/ingestion/IngestionService';
 
 export type RootStackParamList = {
   Setup: undefined;
@@ -44,7 +46,7 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 // Placeholder for Settings until implemented
 const SettingsScreenPlaceholder = () => (
   <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-    <Text>Settings & Profile (Coming Soon)</Text>
+    <Text>Settings &amp; Profile (Coming Soon)</Text>
   </View>
 );
 
@@ -164,6 +166,13 @@ const App = () => {
         if (isComplete) {
           setInitialRoute("MainTabs");
         }
+
+        // Start auto-ingestion if enabled
+        try {
+          await IngestionService.start();
+        } catch (e) {
+          console.warn('IngestionService startup (non-critical):', e);
+        }
       } catch (e) {
         console.error('Failed to initialize:', e);
       } finally {
@@ -171,6 +180,11 @@ const App = () => {
       }
     };
     init();
+
+    return () => {
+      // Cleanup ingestion on unmount
+      IngestionService.stop();
+    };
   }, []);
 
   if (loading) return null; // Or a splash screen
