@@ -12,7 +12,12 @@ import SetupScreen from './src/screens/SetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
-import ModelDownloadScreen from './src/screens/ModelDownloadScreen';
+import AiManagementScreen from './src/screens/AiManagementScreen';
+
+// ...
+
+
+
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import AdviceScreen from './src/screens/AdviceScreen';
 import { SmartSuggestionScreen } from './src/screens/SmartSuggestionScreen';
@@ -28,7 +33,7 @@ export type RootStackParamList = {
   MainTabs: undefined; // The Tab Navigator
   AddExpense: undefined;
   SmsReader: undefined;
-  ModelDownload: undefined;
+  AiManagement: undefined;
   SmartSuggestion: { name: string; count: number };
 };
 
@@ -222,8 +227,8 @@ const App = () => {
                 options={{ headerShown: false }}
               />
               <Stack.Screen
-                name="ModelDownload"
-                component={ModelDownloadScreen}
+                name="AiManagement"
+                component={AiManagementScreen}
                 options={{ headerShown: false }}
               />
             </Stack.Navigator>
