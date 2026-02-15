@@ -72,26 +72,26 @@ export const getAIAdvice = async (
  */
 export const categorizeTransactionRemote = async (text: string, categories: string[], contextHint?: string): Promise<{ amount?: number, category?: string, description?: string }> => {
     try {
-        const catStr = categories.length > 0 ? categories.join(", ") : "Food, Transport, Rent, Utilities, Entertainment, Health, Shopping, Salary, Transfer, Other";
-        const contextMsg = contextHint
-            ? `Context: The user previously categorized this payment as '${contextHint}'. Prefer this category.`
-            : "";
+        const catStr = categories.length > 0 ? categories.join(",") : "Food,Transport,Rent,Utilities,Entertainment,Health,Shopping,Salary,Transfer,Other";
 
-        const systemPrompt = `You are an expense assistant. Extract amount, category, and description. Categories: ${catStr}. ${contextMsg}\nFormat: JSON only.`;
+        // CONCISE PROMPT FOR SPEED
+        const systemPrompt = `Classify expense. Return JSON.
+Categories: [${catStr}]
+Context: ${contextHint || 'None'}
+Format: {"category": "String", "amount": Number, "description": "String"}`;
 
         const response = await client.chatCompletion({
-            model: "Qwen/Qwen2.5-72B-Instruct", // Using the big model for accuracy online
+            model: "Qwen/Qwen2.5-72B-Instruct",
             messages: [
                 { role: "system", content: systemPrompt },
-                { role: "user", content: `Transaction: ${text}` }
+                { role: "user", content: text }
             ],
-            max_tokens: 100,
+            max_tokens: 60, // Very tight token limit for speed
             temperature: 0.1,
-            response_format: { type: "json_object" } // Qwen support for json_mode varies, but Instruct usually follows
+            response_format: { type: "json_object" }
         });
 
         const content = response.choices[0].message.content || "{}";
-        // Extract JSON just in case
         const firstBrace = content.indexOf('{');
         const lastBrace = content.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1) {
