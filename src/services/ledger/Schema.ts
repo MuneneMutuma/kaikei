@@ -36,3 +36,29 @@ export const DEFAULT_CATEGORIES: Omit<Category, 'id'>[] = [
     { name: 'Loans', keywords: ['loan', 'fuliza', 'mshwari', 'kcb', 'equity', 'bank'], isCustom: false },
     { name: 'Other', keywords: [], isCustom: false },
 ];
+
+export const PERSONA_DEFAULTS: Record<string, Omit<Category, 'id'>[]> = {
+    'Mama Mboga': [
+        { name: 'Stock', keywords: ['stock', 'soko', 'marikiti', 'supplies'], isCustom: false },
+        { name: 'Spoilage', keywords: ['spoilage', 'rotten', 'waste', 'dump'], isCustom: false },
+        { name: 'Market Fees', keywords: ['market', 'council', 'kanjo', 'fee', 'cess'], isCustom: false },
+        { name: 'Transport', keywords: ['transport', 'fare', 'nduthhi', 'mzigo'], isCustom: false },
+        { name: 'Airtime', keywords: ['airtime', 'data', 'bundle'], isCustom: false },
+    ],
+    'Bodaboda Rider': [
+        { name: 'Fuel', keywords: ['fuel', 'petrol', 'shell', 'total', 'oil'], isCustom: false },
+        { name: 'Service', keywords: ['service', 'mechanic', 'oil change', 'plug'], isCustom: false },
+        { name: 'Repairs', keywords: ['repair', 'puncture', 'tyre', 'tube', 'spoke'], isCustom: false },
+        { name: 'Fines', keywords: ['fine', 'police', 'cop', 'bond'], isCustom: false },
+        { name: 'Loan', keywords: ['loan', 'daily', 'repayment', 'asset'], isCustom: false },
+        { name: 'Food', keywords: ['lunch', 'tea'], isCustom: false },
+    ],
+    'Mochi': [
+        { name: 'Materials', keywords: ['leather', 'glue', 'sole', 'thread', 'polish'], isCustom: false },
+        { name: 'Labor', keywords: ['labor', 'fundi', 'helper'], isCustom: false },
+        { name: 'Rent', keywords: ['rent', 'stall'], isCustom: false },
+        { name: 'Transport', keywords: ['transport', 'delivery'], isCustom: false },
+        { name: 'Utilities', keywords: ['power', 'token'], isCustom: false },
+    ],
+    'User': DEFAULT_CATEGORIES // Fallback
+};

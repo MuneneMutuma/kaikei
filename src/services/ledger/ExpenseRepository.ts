@@ -1,5 +1,5 @@
 import { Database } from './Database';
-import { Expense, Category } from './Schema';
+import { Expense, Category, PERSONA_DEFAULTS } from './Schema';
 import { v4 as uuidv4 } from 'uuid';
 import { parseMpesaMessage } from '../../utils/mpesaParser';
 
@@ -128,19 +128,20 @@ export class ExpenseRepository {
         }));
     }
 
-    public async addCategory(name: string, isCustom: boolean = true): Promise<Category> {
+    public async addCategory(name: string, keywords: string[] = [], budgetLimit?: number, isCustom: boolean = true): Promise<Category> {
         const id = uuidv4();
-        const keywordsStr = JSON.stringify([]); // Empty keywords for custom category
+        const keywordsStr = JSON.stringify(keywords);
 
         await this.db.execute(
-            `INSERT INTO categories (id, name, keywords, isCustom) VALUES (?, ?, ?, ?)`,
-            [id, name, keywordsStr, isCustom ? 1 : 0]
+            `INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)`,
+            [id, name, keywordsStr, budgetLimit || null, isCustom ? 1 : 0]
         );
 
         return {
             id,
             name,
-            keywords: [],
+            keywords,
+            budgetLimit,
             isCustom
         };
     }
@@ -589,5 +590,98 @@ export class ExpenseRepository {
         });
 
         return map;
+    }
+    /**
+     * Get Rich Context for AI Advice (Current + 3 Months History)
+     */
+    public async getAdviceContext(): Promise<{
+        currentMonth: { total: number, breakdown: { name: string, total: number }[] },
+        history: { month: string, total: number }[],
+        insights: string[] // Pre-calculated insights (e.g. "Fuel is up 20%")
+    }> {
+        const now = new Date();
+        const currentMonth = now.getMonth() + 1;
+        const currentYear = now.getFullYear();
+
+        // 1. Current Month Data
+        const currentSummary = await this.getFinancialSummary(currentMonth, currentYear);
+        const currentStart = `${currentYear}-${currentMonth.toString().padStart(2, '0')}-01`;
+        const currentEnd = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
+        const currentBreakdown = await this.getCategoryTotals(currentStart, currentEnd + ' 23:59:59');
+
+        // 2. Historical Data (Last 3 Months)
+        const history: { month: string, total: number }[] = [];
+        const categoryavgs: Record<string, number[]> = {};
+
+        for (let i = 1; i <= 3; i++) {
+            const d = new Date(currentYear, currentMonth - 1 - i, 1);
+            const m = d.getMonth() + 1;
+            const y = d.getFullYear();
+            const label = d.toLocaleString('default', { month: 'short' });
+
+            const summary = await this.getFinancialSummary(m, y);
+            history.push({ month: label, total: summary.totalExpense });
+
+            // Accumulate category totals for averaging
+            // Optimization: Only do this for top categories if perf is issue? 
+            // For now, fetch breakdown for history too.
+            const start = `${y}-${m.toString().padStart(2, '0')}-01`;
+            const end = new Date(y, m, 0).toISOString().split('T')[0];
+            const breakdown = await this.getCategoryTotals(start, end + ' 23:59:59');
+
+            breakdown.forEach(cat => {
+                if (!categoryavgs[cat.name]) categoryavgs[cat.name] = [];
+                categoryavgs[cat.name].push(cat.total);
+            });
+        }
+
+        // 3. Generate Rule-Based Insights (Speed + Transparency)
+        const insights: string[] = [];
+
+        // Trend Analysis
+        const avgHistory = history.reduce((sum, h) => sum + h.total, 0) / (history.length || 1);
+        if (currentSummary.totalExpense > avgHistory * 1.15) {
+            insights.push(`Total spending is ${Math.round((currentSummary.totalExpense / avgHistory - 1) * 100)}% higher than your 3-month average.`);
+        }
+
+        // Category Spikes
+        currentBreakdown.forEach(cat => {
+            const hist = categoryavgs[cat.name];
+            if (hist && hist.length > 0) {
+                const avg = hist.reduce((a, b) => a + b, 0) / hist.length;
+                if (cat.total > avg * 1.2 && cat.total > 1000) { // Spike > 20% and significant amount
+                    insights.push(`${cat.name} usage is unusually high (${Math.round((cat.total / avg - 1) * 100)}% above normal).`);
+                }
+            }
+        });
+
+        return {
+            currentMonth: {
+                total: currentSummary.totalExpense,
+                breakdown: currentBreakdown
+            },
+            history: history.reverse(), // Oldest first
+            insights
+        };
+    }
+
+    /**
+     * Ensure Categories for Persona exist
+     */
+    public async ensureCategoriesForPersona(persona: string): Promise<number> {
+        const defaults = PERSONA_DEFAULTS[persona];
+        if (!defaults) return 0;
+
+        const existing = await this.getAllCategories();
+        const existingNames = new Set(existing.map(c => c.name.toLowerCase()));
+        let added = 0;
+
+        for (const cat of defaults) {
+            if (!existingNames.has(cat.name.toLowerCase())) {
+                await this.addCategory(cat.name, cat.keywords, cat.budgetLimit);
+                added++;
+            }
+        }
+        return added;
     }
 }
