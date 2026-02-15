@@ -413,27 +413,10 @@ export default function HomeScreen({ route, navigation }: any) {
         </TouchableOpacity>
       </Modal>
 
-      {/* Category Modal */}
-      <Modal visible={categoryModalVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.drawerContainer, { height: '50%' }]}>
-            <Text style={styles.drawerTitle}>Select Category</Text>
-            <SectionList
-              sections={[{ title: 'Categories', data: categories }]}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.catItem} onPress={() => {
-                  setEditCategoryId(item.id);
-                  setCategoryModalVisible(false);
-                }}>
-                  <Text style={styles.catText}>{item.name}</Text>
-                </TouchableOpacity>
-              )}
-              keyExtractor={(item) => item.id}
-            />
-          </View>
-        </View>
-      </Modal>
-    </View>
+
+
+
+    </View >
   );
 }
 

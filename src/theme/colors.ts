@@ -21,4 +21,8 @@ export const colors = {
     // Transparent (Glass)
     glassWhite: 'rgba(255, 255, 255, 0.9)',
     glassBorder: 'rgba(255, 255, 255, 0.5)',
+
+    // Gradients
+    gradientPrimary: ['#4CAF50', '#2E7D32'],
+    gradientAccent: ['#2196F3', '#1565C0'],
 };

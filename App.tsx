@@ -14,7 +14,6 @@ import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import SmsReaderScreen from './src/screens/SmsReaderScreen';
 import AiManagementScreen from './src/screens/AiManagementScreen';
 
-// ...
 
 
 
@@ -121,7 +120,7 @@ const MainTabs = () => {
             const { onPress, onLongPress, accessibilityState, accessibilityLabel } = props;
             return (
               <TouchableOpacity
-                onPress={() => (navigation as any).navigate('SmsReader')}
+                onPress={() => (navigation as any).navigate('AddExpense')}
                 onLongPress={onLongPress || undefined}
                 accessibilityState={accessibilityState}
                 accessibilityLabel={accessibilityLabel}
@@ -200,26 +199,25 @@ const App = () => {
         <BottomSheetModalProvider>
           <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
           <NavigationContainer>
-            <Stack.Navigator initialRouteName={initialRoute}>
+            <Stack.Navigator
+              initialRouteName={initialRoute}
+              screenOptions={{ headerShown: false }}
+            >
               <Stack.Screen
                 name="Setup"
                 component={SetupScreen}
-                options={{ headerShown: false }}
               />
               <Stack.Screen
                 name="MainTabs"
                 component={MainTabs}
-                options={{ headerShown: false }}
               />
               <Stack.Screen
                 name="AddExpense"
                 component={AddExpenseScreen}
-                options={{ title: 'Add Expense' }}
               />
               <Stack.Screen
                 name="SmsReader"
                 component={SmsReaderScreen}
-                options={{ title: 'Import Transactions' }}
               />
               <Stack.Screen
                 name="SmartSuggestion"
