@@ -16,6 +16,7 @@ export interface MpesaTransaction {
   source: 'mpesa';
   raw_text: string;
   excludeFromAnalytics?: boolean;
+  original_tx_id?: string;
   balances: {
     mpesa?: number;
     pochi?: number;
@@ -235,6 +236,39 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
   }
 
   /** =========================
+   *  CASE 5: M-PESA REVERSAL
+   *  ========================= */
+  else if (/Reversal of transaction (ID|no)/i.test(text)) {
+    type = 'other'; // Will be handled as special case in Importer
+
+    // "Reversal of transaction ID N8D1... has been successfully reversed..."
+    const origMatch = text.match(/Reversal of transaction (?:ID|no\.?)\s+([A-Z0-9]+)/i);
+    const original_tx_id = origMatch ? origMatch[1] : undefined;
+
+    // Determine direction based on credit/debit
+    // "Ksh... credited to your M-PESA" -> Money coming back -> IN (but invalidating previous OUT)
+    // "Ksh... debited from your M-PESA" -> Money leaving -> OUT (invalidating previous IN)
+    if (/credited/i.test(text)) direction = 'in';
+    else if (/debited/i.test(text)) direction = 'out';
+    else direction = 'unknown';
+
+    // We explicitly flag this so Importer knows to look for the original
+    if (original_tx_id) {
+      // We attach a temporary property to the returned object
+      // But MpesaTransaction interface needs to support it.
+      // See interface update below.
+      (balances as any)._original_tx_id = original_tx_id;
+      (balances as any)._is_reversal = true;
+    }
+
+    action = 'reversal';
+    excludeFromAnalytics = true; // The reversal itself is transparent
+
+    const mpesaBalMatch = text.match(/New\s+M-?PESA balance is Ksh\.?\s?([\d.,]+)/i);
+    if (mpesaBalMatch) balances.mpesa = parseFloat(mpesaBalMatch[1].replace(/,/g, ''));
+  }
+
+  /** =========================
    *  DEFAULT / UNKNOWN
    *  ========================= */
   else {
@@ -245,7 +279,7 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
     to = '';
   }
 
-  return {
+  const result: MpesaTransaction = {
     tx_id,
     type,
     direction,
@@ -263,4 +297,11 @@ export const parseMpesaMessage = (raw: string): MpesaTransaction | null => {
     excludeFromAnalytics,
     balances,
   };
+
+  // Hacky insertion of original_tx_id if found (cleaner would be to update interface)
+  if ((balances as any)._original_tx_id) {
+    (result as any).original_tx_id = (balances as any)._original_tx_id;
+  }
+
+  return result;
 };

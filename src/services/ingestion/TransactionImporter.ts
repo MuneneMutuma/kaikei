@@ -243,7 +243,19 @@ export class TransactionImporter {
                 type,
                 sender,
                 recipient,
+                recipient,
             });
+
+            // 6.5 Handle Reversals
+            if (tx.original_tx_id) {
+                console.log(`[TransactionImporter] Detected reversal of ${tx.original_tx_id}`);
+                const marked = await this.repo.markAsReversed(tx.original_tx_id);
+                if (marked) {
+                    console.log(`[TransactionImporter] Marked original tx ${tx.original_tx_id} as reversed.`);
+                } else {
+                    console.warn(`[TransactionImporter] Original tx ${tx.original_tx_id} not found for reversal.`);
+                }
+            }
 
             // 7. Emit event for UI refresh (only if actually inserted)
             if (source !== 'manual') {

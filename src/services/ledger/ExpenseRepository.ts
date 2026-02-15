@@ -684,4 +684,15 @@ export class ExpenseRepository {
         }
         return added;
     }
+
+    /**
+     * Mark a transaction as reversed (exclude from analytics)
+     */
+    public async markAsReversed(transactionId: string): Promise<boolean> {
+        const result = await this.db.execute(
+            `UPDATE expenses SET excludeFromAnalytics = 1 WHERE transactionId = ?`,
+            [transactionId]
+        );
+        return (result.rowsAffected || 0) > 0;
+    }
 }
