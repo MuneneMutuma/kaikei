@@ -18,6 +18,25 @@ export class ModelManager {
 
     // ... unchanged ...
 
+    static async deleteModel(): Promise<void> {
+        try {
+            const path = ModelManager.getModelPath();
+            if (await RNFS.exists(path)) {
+                await RNFS.unlink(path);
+                console.log("ModelManager: Model deleted");
+            }
+            // Also clean metadata
+            const meta = ModelManager.getMetaPath();
+            if (await RNFS.exists(meta)) {
+                await RNFS.unlink(meta);
+            }
+            ModelManager.notify();
+        } catch (e) {
+            console.error("Failed to delete model", e);
+            throw e;
+        }
+    }
+
     // Helper to delete previous heavy models to save space
     static async cleanupOldModels() {
         try {

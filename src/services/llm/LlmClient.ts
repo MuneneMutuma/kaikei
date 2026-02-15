@@ -57,6 +57,30 @@ export class LlmClient {
         return this.categorizeLocal(text, availableCategories, contextHint);
     }
 
+    async generateCompletion(systemPrompt: string, userPrompt: string): Promise<string> {
+        if (!this.context) {
+            await this.init();
+        }
+        if (!this.context) throw new Error("LLM Context failed to initialize");
+
+        // Format for Qwen 2.5 ChatML
+        const prompt = `<|im_start|>system\n${systemPrompt}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+
+        try {
+            const response = await this.context.completion({
+                prompt: prompt,
+                n_predict: 500, // Longer for detailed advice
+                temperature: 0.7, // Higher creativity for advice
+                stop: ["<|im_end|>", "<|endoftext|>"]
+            });
+            console.log("LlmClient: Gen Result:", response.text);
+            return response.text.trim();
+        } catch (e) {
+            console.error("LlmClient: Generation failed", e);
+            throw e;
+        }
+    }
+
     private async categorizeLocal(text: string, availableCategories: string[] = [], contextHint?: string): Promise<any> {
         if (!this.context) {
             await this.init();
@@ -69,7 +93,7 @@ export class LlmClient {
             const response = await this.context.completion({
                 prompt: prompt,
                 n_predict: 60,
-                temperature: 0.2,
+                temperature: 0.1, // Low temp for classification
                 stop: ["<|im_end|>", "\n\n"]
             });
             console.log("LlmClient: Local Result:", response.text);
@@ -83,7 +107,6 @@ export class LlmClient {
 
     private buildPrompt(text: string, categories: string[], contextHint?: string, useChatML = true): string {
         const catStr = categories.length > 0 ? categories.join(", ") : "Food, Transport, Rent, Utilities, Entertainment, Health, Shopping, Salary, Transfer, Other";
-
         const contextMsg = contextHint
             ? `Context: The user previously categorized this payment as '${contextHint}'. Prefer this category.`
             : "";
@@ -91,14 +114,7 @@ export class LlmClient {
         const system = `You are an expense assistant. Extract amount, category, and description. Categories: ${catStr}. ${contextMsg}\nFormat: JSON only.`;
         const user = `Transaction: ${text}`;
 
-        // Qwen 2.5 ChatML Format
-        if (useChatML) {
-            return `<|im_start|>system\n${system}<|im_end|>\n<|im_start|>user\n${user}<|im_end|>\n<|im_start|>assistant\n{`;
-        } else {
-            // Raw text for HF (if they don't apply template automatically)
-            // Ideally we send the same structure.
-            return `<|im_start|>system\n${system}<|im_end|>\n<|im_start|>user\n${user}<|im_end|>\n<|im_start|>assistant\n{`;
-        }
+        return `<|im_start|>system\n${system}<|im_end|>\n<|im_start|>user\n${user}<|im_end|>\n<|im_start|>assistant\n{`;
     }
 
     private extractJson(output: string): string {

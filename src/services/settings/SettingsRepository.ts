@@ -91,4 +91,47 @@ export class SettingsRepository {
     public async setAlwaysOnEnabled(enabled: boolean): Promise<void> {
         await this.setValue('always_on_enabled', enabled ? 'true' : 'false');
     }
+
+    // --- AI Settings ---
+
+    public async isOfflineCategorizationEnabled(): Promise<boolean> {
+        try {
+            const val = await this.getValue('offline_categorization_enabled');
+            // Default to TRUE if not set, but only if model is ready? 
+            // Actually default to TRUE for now.
+            return val !== 'false';
+        } catch {
+            return true;
+        }
+    }
+
+    public async setOfflineCategorizationEnabled(enabled: boolean): Promise<void> {
+        await this.setValue('offline_categorization_enabled', enabled ? 'true' : 'false');
+    }
+
+    public async isOfflineAdviceEnabled(): Promise<boolean> {
+        try {
+            const val = await this.getValue('offline_advice_enabled');
+            return val !== 'false';
+        } catch {
+            return true;
+        }
+    }
+
+    public async setOfflineAdviceEnabled(enabled: boolean): Promise<void> {
+        await this.setValue('offline_advice_enabled', enabled ? 'true' : 'false');
+    }
+
+    public async isPreferLocalModelEnabled(): Promise<boolean> {
+        try {
+            const val = await this.getValue('prefer_local_model_enabled');
+            return val === 'true';
+        } catch {
+            return false;
+        }
+    }
+
+    public async setPreferLocalModelEnabled(enabled: boolean): Promise<void> {
+        await this.setValue('prefer_local_model_enabled', enabled ? 'true' : 'false');
+    }
 }
