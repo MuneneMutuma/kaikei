@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SettingsRepository } from '../services/settings/SettingsRepository';
+import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 
 type SetupScreenProps = {
   navigation: any;
@@ -23,7 +24,11 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ navigation }) => {
       console.log(`Selected Persona: ${selectedPersona}, Name: ${name}`);
       try {
         const settingsRepo = new SettingsRepository();
+        const expenseRepo = new ExpenseRepository();
+
         await settingsRepo.saveUserProfile(name, selectedPersona);
+        await expenseRepo.ensureCategoriesForPersona(selectedPersona);
+
         // Navigate to MainTabs, replacing the current screen so user can't go back to setup
         navigation.replace('MainTabs');
       } catch (e) {

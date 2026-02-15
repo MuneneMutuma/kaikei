@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Switch, Alert, NativeModules, Linking, PermissionsAndroid } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
@@ -12,13 +13,16 @@ import { IngestionService } from '../services/ingestion/IngestionService';
 import { BackupModal } from '../components/BackupModal';
 import { RestorePickerModal } from '../components/RestorePickerModal';
 import { BackupFile } from '../services/backup/BackupService';
+import { PERSONA_DEFAULTS } from '../services/ledger/Schema';
 
 const { SmsListenerModule } = NativeModules;
 
 export default function ProfileScreen() {
+    const navigation = useNavigation();
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [userProfile, setUserProfile] = useState({ name: 'User', persona: 'Standard', email: '' });
     const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+    const [personaModalVisible, setPersonaModalVisible] = useState(false);
 
     // Backup State
     const [backupModalVisible, setBackupModalVisible] = useState(false);
@@ -35,6 +39,7 @@ export default function ProfileScreen() {
     const [notificationAccessOk, setNotificationAccessOk] = useState(false);
     const [batteryOptimized, setBatteryOptimized] = useState(true); // true = BAD (optimized = killed)
     const settingsRepo = React.useMemo(() => new SettingsRepository(), []);
+    const expenseRepo = React.useMemo(() => new ExpenseRepository(), []);
 
     React.useEffect(() => {
         const loadProfile = async () => {
@@ -51,6 +56,24 @@ export default function ProfileScreen() {
         };
         loadProfile();
     }, []);
+
+    const handlePersonaSwitch = async (newPersona: string) => {
+        try {
+            await settingsRepo.setValue('user_persona', newPersona);
+            const added = await expenseRepo.ensureCategoriesForPersona(newPersona);
+
+            setUserProfile(prev => ({ ...prev, persona: newPersona }));
+            setPersonaModalVisible(false);
+
+            if (added > 0) {
+                Alert.alert("Success", `Switched to ${newPersona}. Added ${added} new categories!`);
+            } else {
+                Alert.alert("Success", `Switched to ${newPersona}. Categories updated.`);
+            }
+        } catch (e) {
+            Alert.alert("Error", "Failed to switch persona.");
+        }
+    };
 
     // Load auto-import settings and check permissions
     const refreshHealthCheck = useCallback(async () => {
@@ -249,15 +272,17 @@ export default function ProfileScreen() {
 
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 {/* Profile Card */}
-                <View style={styles.profileCard}>
-                    <View style={styles.avatarContainer}>
-                        <Text style={styles.avatarText}>{userProfile.name.charAt(0).toUpperCase()}</Text>
+                <TouchableOpacity activeOpacity={0.9} onPress={() => setPersonaModalVisible(true)}>
+                    <View style={styles.profileCard}>
+                        <View style={styles.avatarContainer}>
+                            <Text style={styles.avatarText}>{userProfile.name.charAt(0).toUpperCase()}</Text>
+                        </View>
+                        <View>
+                            <Text style={styles.userName}>{userProfile.name}</Text>
+                            <Text style={styles.userEmail}>{userProfile.persona} Account</Text>
+                        </View>
                     </View>
-                    <View>
-                        <Text style={styles.userName}>{userProfile.name}</Text>
-                        <Text style={styles.userEmail}>{userProfile.persona} Account</Text>
-                    </View>
-                </View>
+                </TouchableOpacity>
 
                 {/* Section: Account */}
                 <Text style={styles.sectionTitle}>Account</Text>
@@ -366,6 +391,26 @@ export default function ProfileScreen() {
                 <View style={styles.section}>
                     {renderMenuItem(<Bell size={20} color={colors.primary} />, "Notifications", undefined, true)}
                     {renderMenuItem(<Shield size={20} color={colors.primary} />, "Privacy & Security")}
+                    <TouchableOpacity onPress={() => {
+                        try {
+                            (navigation as any).navigate('AiManagement');
+                        } catch (e: any) {
+                            Alert.alert("Error", e.message);
+                        }
+                    }}>
+                        <View style={styles.menuItem}>
+                            <View style={styles.menuIconContainer}>
+                                <Zap size={20} color={colors.primary} />
+                            </View>
+                            <View style={styles.menuTextContainer}>
+                                <Text style={styles.menuLabel}>AI & Intelligence</Text>
+                            </View>
+                            <View style={styles.menuRight}>
+                                <Text style={styles.menuValue}>Offline Model</Text>
+                                <ChevronRight size={20} color={colors.textSecondary} />
+                            </View>
+                        </View>
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={handleBackup}>
                         <View style={styles.menuItem}>
                             <View style={styles.menuIconContainer}>
@@ -451,6 +496,33 @@ export default function ProfileScreen() {
                 onClose={() => setRestorePickerVisible(false)}
                 onSelect={handleRestoreFileSelected}
             />
+
+            {/* Persona Switcher Modal */}
+            {personaModalVisible && (
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContainer}>
+                        <Text style={styles.modalTitle}>Switch Persona</Text>
+                        <Text style={styles.modalText}>
+                            Select a new persona to customize your categories.
+                        </Text>
+                        {Object.keys(PERSONA_DEFAULTS).filter(p => p !== 'User').map(p => (
+                            <TouchableOpacity
+                                key={p}
+                                style={[styles.modalBtn, { backgroundColor: '#E3F2FD', marginBottom: 8, width: '100%', flex: 0 }]}
+                                onPress={() => handlePersonaSwitch(p)}
+                            >
+                                <Text style={[styles.modalBtnTextDelete, { color: colors.text }]}>{p}</Text>
+                            </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity
+                            style={[styles.modalBtn, styles.modalBtnCancel, { marginTop: 8, width: '100%', flex: 0 }]}
+                            onPress={() => setPersonaModalVisible(false)}
+                        >
+                            <Text style={styles.modalBtnTextCancel}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
         </View>
     );
 }
