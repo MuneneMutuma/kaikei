@@ -84,5 +84,3 @@ yarn-error.log
 *.onnx
 *.weights
 
-
-reviews/
