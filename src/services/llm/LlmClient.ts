@@ -1,6 +1,6 @@
 import { initLlama, LlamaContext } from 'llama.rn';
 import { ModelManager } from './ModelManager';
-import { categorizeTransactionRemote } from './HuggingFaceService';
+import { getPersonaPrompt } from './PersonaPrompts';
 
 export class LlmClient {
     private static instance: LlmClient;
@@ -26,8 +26,6 @@ export class LlmClient {
             const isReady = await ModelManager.isModelReady();
 
             if (!isReady) {
-                // If we are strictly offline, this is fatal. 
-                // In hybrid, we might survive if online, but we want local fallback always.
                 throw new Error("Local Model not downloaded");
             }
 
@@ -51,8 +49,6 @@ export class LlmClient {
     }
 
     async categorize(text: string, availableCategories: string[] = [], contextHint?: string): Promise<{ amount?: number, category?: string, description?: string }> {
-        // Privacy First: Use Local Model (Qwen 0.5B) by default.
-        // Cloud inference is available via HuggingFaceService for specific user-initiated actions.
         console.log("LlmClient: Using Privacy-First Local Inference");
         return this.categorizeLocal(text, availableCategories, contextHint);
     }
@@ -63,14 +59,13 @@ export class LlmClient {
         }
         if (!this.context) throw new Error("LLM Context failed to initialize");
 
-        // Format for Qwen 2.5 ChatML
         const prompt = `<|im_start|>system\n${systemPrompt}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n`;
 
         try {
             const response = await this.context.completion({
                 prompt: prompt,
-                n_predict: 500, // Longer for detailed advice
-                temperature: 0.7, // Higher creativity for advice
+                n_predict: 500,
+                temperature: 0.7,
                 stop: ["<|im_end|>", "<|endoftext|>"]
             });
             console.log("LlmClient: Gen Result:", response.text);
@@ -78,6 +73,64 @@ export class LlmClient {
         } catch (e) {
             console.error("LlmClient: Generation failed", e);
             throw e;
+        }
+    }
+
+    /**
+     * Generates structured advice with citations.
+     * Returns: { advice: string, citations: Array<{ type: string, id: string, label: string }> }
+     */
+    async generateStructuredAdvice(persona: string, userPrompt: string): Promise<any> {
+        if (!this.context) {
+            await this.init();
+        }
+        if (!this.context) throw new Error("LLM Context failed to initialize");
+
+        const systemPrompt = getPersonaPrompt(persona);
+
+        // Force JSON structure and provide examples
+        const jsonSchema = `
+        ## Citation Rules:
+        1. For EVERY financial observation, you MUST add a citation in the "citations" array.
+        2. "type" must be "category". 
+        3. "id" must be the EXACT category name (e.g., "Fuel", "Rent", "Groceries").
+        4. "label" should be short and descriptive (e.g., "See Fuel (Ksh 50k)").
+        
+        ## Output Format:
+        JSON ONLY. Example:
+        {
+          "advice": "I noticed your Rent (Ksh 50k) is the main driver...",
+          "citations": [
+            { "type": "category", "id": "Rent", "label": "See Rent (50k)" }
+          ]
+        }
+
+        ## DATA RULES
+        Do not cite any false data. You MUST use figures that are true from the input both in your advice and in your citations.
+        `;
+
+        const prompt = `<|im_start|>system\n${systemPrompt}\n${jsonSchema}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n{`;
+
+        try {
+            const response = await this.context.completion({
+                prompt: prompt,
+                n_predict: 800, // Increased for detailed advice
+                temperature: 0.7, // Lower for more stable JSON
+                stop: ["<|im_end|>", "<|endoftext|>"]
+            });
+
+            console.log("LlmClient: Raw Response:", response.text);
+            const jsonStr = this.extractJson(response.text);
+            console.log("LlmClient: Extracted JSON:", jsonStr);
+
+            return JSON.parse(jsonStr);
+
+        } catch (e) {
+            console.error("LlmClient: Structured Generation failed", e);
+            return {
+                advice: "Failed to generate structured advice. Please try again.",
+                citations: []
+            };
         }
     }
 
@@ -93,7 +146,7 @@ export class LlmClient {
             const response = await this.context.completion({
                 prompt: prompt,
                 n_predict: 60,
-                temperature: 0.1, // Low temp for classification
+                temperature: 0.1,
                 stop: ["<|im_end|>", "\n\n"]
             });
             console.log("LlmClient: Local Result:", response.text);
@@ -118,16 +171,45 @@ export class LlmClient {
     }
 
     private extractJson(output: string): string {
-        let fullStr = "{" + output;
+        const trimmed = output.trim();
+        const combined = "{" + output;
 
-        // Sanitize: sometimes models repeat the prompt or add chatter.
-        // We look for the FIRST '{' and the LAST '}'
-        const firstBrace = fullStr.indexOf('{');
-        const lastBrace = fullStr.lastIndexOf('}');
+        // Strategy 1: Try parsing raw (Model ignored prompt suffix and gave full JSON)
+        try {
+            JSON.parse(trimmed);
+            return trimmed;
+        } catch (e) { }
 
-        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-            return fullStr.substring(firstBrace, lastBrace + 1);
-        }
+        // Strategy 2: Try parsing combined (Model respected prompt suffix)
+        try {
+            JSON.parse(combined);
+            return combined;
+        } catch (e) { }
+
+        // Strategy 3: Heuristic Substring on Raw (Find buried JSON)
+        try {
+            const first = trimmed.indexOf('{');
+            const last = trimmed.lastIndexOf('}');
+            if (first !== -1 && last > first) {
+                const sub = trimmed.substring(first, last + 1);
+                JSON.parse(sub);
+                return sub;
+            }
+        } catch (e) { }
+
+        // Strategy 4: Heuristic Substring on Combined
+        try {
+            const first = combined.indexOf('{');
+            const last = combined.lastIndexOf('}');
+            if (first !== -1 && last > first) {
+                const sub = combined.substring(first, last + 1);
+                JSON.parse(sub);
+                return sub;
+            }
+        } catch (e) { }
+
+        // If all fail, return empty object to prevent crash
+        console.warn("LlmClient: JSON extraction failed for all strategies.");
         return "{}";
     }
 

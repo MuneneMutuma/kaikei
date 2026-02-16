@@ -1,20 +1,20 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, Platform, RefreshControl, Alert, LayoutAnimation, UIManager } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+    View, Text, TouchableOpacity, ActivityIndicator, StyleSheet,
+    ScrollView, Platform, RefreshControl, Alert, LayoutAnimation, UIManager
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ModelManager } from '../services/llm/ModelManager';
 import { LlmClient } from '../services/llm/LlmClient';
-import { getAIAdvice } from '../services/llm/HuggingFaceService';
+import { getStructuredAIAdvice } from '../services/llm/HuggingFaceService';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 import { SettingsRepository } from '../services/settings/SettingsRepository';
 import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
-import { Zap, Cloud, Wallet, Sparkles, TrendingUp, AlertCircle, RefreshCw, Lightbulb, TrendingDown } from 'lucide-react-native';
+import { Zap, Cloud, Wallet, Sparkles, TrendingUp, ArrowRight } from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { MotiView } from 'moti';
-
 
 if (Platform.OS === 'android') {
     if (UIManager.setLayoutAnimationEnabledExperimental) {
@@ -22,25 +22,29 @@ if (Platform.OS === 'android') {
     }
 }
 
-interface CategoryTotal {
-    name: string;
-    total: number;
+interface Citation {
+    type: 'category' | 'transaction';
+    id: string; // Category Name or Tx ID
+    label: string;
 }
 
 const AdviceScreen = () => {
     const insets = useSafeAreaInsets();
+    const navigation = useNavigation<any>(); // Simple any for now
 
     // State
-    const [advice, setAdvice] = useState<string>('');
+    const [adviceText, setAdviceText] = useState<string>('');
+    const [citations, setCitations] = useState<Citation[]>([]);
     const [loading, setLoading] = useState(false);
 
     // Data Context
     const [currentTotal, setCurrentTotal] = useState(0);
-    const [breakdown, setBreakdown] = useState<CategoryTotal[]>([]);
-    const [history, setHistory] = useState<{ month: string, total: number }[]>([]);
+    const [breakdown, setBreakdown] = useState<any[]>([]);
+    const [history, setHistory] = useState<any[]>([]);
     const [insights, setInsights] = useState<string[]>([]);
-    const [topCategories, setTopCategories] = useState<{ name: string, amount: number }[]>([]); // For Cloud Fallback
+    const [topTransactions, setTopTransactions] = useState<any[]>([]);
 
+    // User Settings
     const [persona, setPersona] = useState('User');
     const [preferLocal, setPreferLocal] = useState(false);
     const [isModelReady, setIsModelReady] = useState(false);
@@ -53,23 +57,17 @@ const AdviceScreen = () => {
             const userSettings = await settingsRepo.getUserSettings();
             setPersona(userSettings.userPersona);
 
-            // Settings
             const prefer = await settingsRepo.isPreferLocalModelEnabled();
             const ready = await ModelManager.isModelReady();
             setPreferLocal(prefer);
             setIsModelReady(ready);
 
-            // Get Rich Context
             const context = await repo.getAdviceContext();
-
             setCurrentTotal(context.currentMonth.total);
             setBreakdown(context.currentMonth.breakdown);
             setHistory(context.history);
             setInsights(context.insights);
-
-            // Also get summary for top categories (needed for Cloud simple view if we fallback, but we can reuse breakdown)
-            const sorted = [...context.currentMonth.breakdown].sort((a, b) => b.total - a.total).slice(0, 3);
-            setTopCategories(sorted.map(c => ({ name: c.name, amount: c.total })));
+            setTopTransactions(context.topTransactions);
 
         } catch (e) {
             console.error("Failed to load advice context:", e);
@@ -95,7 +93,8 @@ const AdviceScreen = () => {
 
         const newVal = !preferLocal;
         setPreferLocal(newVal);
-        setAdvice(''); // Clear result
+        setAdviceText('');
+        setCitations([]);
         await settingsRepo.setPreferLocalModelEnabled(newVal);
     };
 
@@ -106,13 +105,15 @@ const AdviceScreen = () => {
         }
 
         setLoading(true);
-        setAdvice('');
+        setAdviceText('');
+        setCitations([]);
 
         try {
-            // Build Shared Context Strings
             const breakdownStr = breakdown.map(c => `- ${c.name}: KES ${c.total.toLocaleString()}`).join('\n');
             const historyStr = history.map(h => `- ${h.month}: KES ${h.total.toLocaleString()}`).join('\n');
             const insightStr = insights.length > 0 ? "Key Insights:\n" + insights.map(i => `- ${i}`).join('\n') : "";
+
+            const topTxStr = topTransactions.length > 0 ? "Largest Transactions this month:\n" + topTransactions.map(t => `- KES ${t.amount.toLocaleString()} on ${t.date} for ${t.description}`).join('\n') : "";
 
             const fullContext = `
             Current Month Total: KES ${currentTotal.toLocaleString()}
@@ -123,61 +124,82 @@ const AdviceScreen = () => {
             Last 3 Months History:
             ${historyStr}
             
+            ${topTxStr}
+            
             ${insightStr}
             `;
 
+            const userPrompt = `
+                ACT AS A STRATEGIC FINANCIAL ANALYST.
+                
+                ## DATA CONTEXT:
+                ${fullContext}
+                
+                ## YOUR TASK:
+                1. Identify my #1 cost driver this month compared to my 3-month average.
+                2. Provide concrete, actionable advice to reduce this cost specifically for my role as a ${persona}.
+                3. Be extremely specific: include predicted savings in KES (e.g., "Changing X could save ~KES 1,200 next month").
+                
+                ## PERSONA-SPECIFIC CHECKS:
+                - If I am a Mama Mboga: Look for stock turnover patterns and suggest ways to reduce perishable-stock losses or transport costs.
+                - If I am a Bodaboda Rider: Analyze Fuel vs. Maintenance vs. Loan/Hire-Purchase payments. Suggest maintenance schedules or fuel saving routes.
+                - If I am a Mochi: Look for material costs (leather, glue, soles) and advise on bulk sourcing vs. repair pricing.
+                
+                ## TRANSPARENCY RULE:
+                Every suggestion must be grounded in the data above. If you tell me to save on Fuel, you MUST cite the 'Fuel' category.
+                `;
+
             if (preferLocal) {
-                // --- LOCAL MODE ---
+                // --- LOCAL MODE (Structured) ---
                 if (!isModelReady) {
                     Alert.alert("Error", "Local model is missing.");
                     setLoading(false);
                     return;
                 }
 
-                const systemPrompt = `You are a senior financial analyst in Kenya. Your client is a "${persona}".
-                Your goal is to provide specific, actionable advice to cut costs and increase savings.
-                
-                Rules:
-                1. Ground your advice in the provided data. CITE SPECIFIC NUMBERS from the history.
-                2. Avoid generic platitudes like "save more". Be specific: "Cut fuel by 10%".
-                3. Use a friendly but professional tone (English).
-                4. Structure your response:
-                   - Observation: What is the biggest issue? (Cite the trend/number)
-                   - Cause: Why is this happening? (based on the breakdown)
-                   - Action: What specifically should the user do?`;
+                console.log("Generating Structured Advice...");
+                const result = await LlmClient.getInstance().generateStructuredAdvice(persona, userPrompt);
 
-                const userPrompt = `Here is my financial data:
-                ${fullContext}
-                
-                Task: Analyze the last 3 months. Identify the #1 cost driver and give concrete recommendations.`;
+                if (result.advice) {
+                    setAdviceText(result.advice);
+                }
+                if (result.citations && Array.isArray(result.citations)) {
+                    setCitations(result.citations);
+                }
 
-                console.log("Generating Local Advice (Trends)...");
-                const result = await LlmClient.getInstance().generateCompletion(systemPrompt, userPrompt);
-                setAdvice(result);
             } else {
-                // --- CLOUD MODE ---
-                console.log("Generating Cloud Advice (Trends)...");
-                // We pass the stringified history/insights as the 3rd arg
-                const result = await getAIAdvice(persona, {
-                    totalIncome: 0, // Not tracking income in this view yet
-                    totalExpense: currentTotal,
-                    topCategories: topCategories
-                }, `History:\n${historyStr}\n${insightStr}`);
+                // --- CLOUD MODE (Structured) ---
+                console.log("Generating Cloud Structured Advice...");
+                const result = await getStructuredAIAdvice(persona, userPrompt);
 
-                setAdvice(result);
+                if (result.advice) {
+                    setAdviceText(result.advice);
+                }
+                if (result.citations && Array.isArray(result.citations)) {
+                    setCitations(result.citations);
+                }
             }
 
         } catch (e) {
             console.error("Advice Gen Error:", e);
-            setAdvice("Pole, I encountered an error. Please try again.");
+            setAdviceText("Pole, I encountered an error. Please try again.");
         } finally {
             setLoading(false);
         }
     };
 
+    const handleCitationPress = (citation: Citation) => {
+        if (citation.type === 'category') {
+            // Navigate to Analytics (Month View) - passing params if supported later
+            // For now, just go to analytics. Ideally, we pass { focusCategory: citation.id }
+            navigation.navigate('Analytics', { focusCategory: citation.id });
+        } else {
+            Alert.alert("Evidence", `Transaction ID: ${citation.id}`);
+        }
+    };
+
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
-            {/* Header */}
             <View style={styles.header}>
                 <View>
                     <Text style={styles.greeting}>Habari, {persona}</Text>
@@ -186,7 +208,6 @@ const AdviceScreen = () => {
                     </Text>
                 </View>
 
-                {/* Visual Toggle */}
                 <TouchableOpacity
                     style={[styles.toggleContainer, preferLocal ? styles.toggleOn : styles.toggleOff]}
                     onPress={toggleSource}
@@ -202,7 +223,6 @@ const AdviceScreen = () => {
                 contentContainerStyle={styles.scrollContent}
                 refreshControl={<RefreshControl refreshing={false} onRefresh={loadData} />}
             >
-                {/* 1. Monthly Snapshot with Trend Indicator */}
                 <View style={styles.factCard}>
                     <View style={styles.factRow}>
                         <View>
@@ -210,7 +230,6 @@ const AdviceScreen = () => {
                             <Text style={styles.factValue}>
                                 KES {currentTotal.toLocaleString()}
                             </Text>
-                            {/* Trend Badge */}
                             {insights.length > 0 && (
                                 <View style={styles.trendBadge}>
                                     <TrendingUp size={12} color="#D32F2F" />
@@ -222,26 +241,8 @@ const AdviceScreen = () => {
                             <Wallet size={24} color={colors.primary} />
                         </View>
                     </View>
-
-                    {/* Insights Preview */}
-                    {insights.length > 0 ? (
-                        <View style={styles.insightBox}>
-                            {insights.slice(0, 2).map((insight, idx) => (
-                                <Text key={idx} style={styles.insightText}>• {insight}</Text>
-                            ))}
-                        </View>
-                    ) : (
-                        <View style={styles.miniBreakdown}>
-                            {breakdown.slice(0, 3).map((cat, idx) => (
-                                <Text key={idx} style={styles.miniCatText}>
-                                    {cat.name}: <Text style={{ fontWeight: 'bold' }}>{cat.total.toLocaleString()}</Text>
-                                </Text>
-                            ))}
-                        </View>
-                    )}
                 </View>
 
-                {/* 2. Action Button */}
                 <TouchableOpacity
                     onPress={handleGetAdvice}
                     disabled={loading || currentTotal === 0}
@@ -270,8 +271,7 @@ const AdviceScreen = () => {
                     </LinearGradient>
                 </TouchableOpacity>
 
-                {/* 3. Advice Result */}
-                {advice ? (
+                {adviceText ? (
                     <MotiView
                         from={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
@@ -282,7 +282,28 @@ const AdviceScreen = () => {
                             <ModelsIcon isLocal={preferLocal} />
                             <Text style={styles.adviceTitle}>Advisor's Perspective</Text>
                         </View>
-                        <Text style={styles.adviceText}>{advice}</Text>
+
+                        {/* THE ADVICE TEXT */}
+                        <Text style={styles.adviceText}>{adviceText}</Text>
+
+                        {/* CITATION CHIPS */}
+                        {citations.length > 0 && (
+                            <View style={styles.citationsContainer}>
+                                <Text style={styles.citationsTitle}>Evidence:</Text>
+                                <View style={styles.chipsRow}>
+                                    {citations.map((cite, idx) => (
+                                        <TouchableOpacity
+                                            key={idx}
+                                            style={styles.chip}
+                                            onPress={() => handleCitationPress(cite)}
+                                        >
+                                            <Text style={styles.chipText}>{cite.label}</Text>
+                                            <ArrowRight size={12} color={colors.primary} style={{ marginLeft: 4 }} />
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+                            </View>
+                        )}
 
                         <Text style={styles.disclaimer}>
                             Based on your spending over the last 3 months.
@@ -292,7 +313,7 @@ const AdviceScreen = () => {
                     !loading && (
                         <View style={styles.placeholder}>
                             <Text style={styles.placeholderText}>
-                                Tap above to compare this month against your 3-month average.
+                                Tap above to see transparent, evidence-based advice.
                             </Text>
                         </View>
                     )
@@ -336,7 +357,6 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: colors.textSecondary,
     },
-    // Toggle
     toggleContainer: {
         width: 50,
         height: 28,
@@ -363,19 +383,17 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     knobOn: {
-        backgroundColor: 'white', // Local active
-        alignSelf: 'flex-start', // Left
+        backgroundColor: 'white',
+        alignSelf: 'flex-start',
     },
     knobOff: {
-        backgroundColor: 'rgba(255,255,255,0.2)', // Cloud active (icon matches bg)
+        backgroundColor: 'rgba(255,255,255,0.2)',
         alignSelf: 'flex-end',
     },
-
     scrollContent: {
         paddingHorizontal: 20,
         paddingBottom: 40,
     },
-    // Snapshot
     factCard: {
         backgroundColor: 'white',
         borderRadius: 20,
@@ -391,7 +409,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 16,
     },
     factLabel: {
         fontSize: 11,
@@ -429,30 +446,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    miniBreakdown: {
-        backgroundColor: '#FAFAFA',
-        padding: 12,
-        borderRadius: 12,
-    },
-    miniCatText: {
-        fontSize: 13,
-        color: colors.text,
-        marginBottom: 4,
-    },
-    insightBox: {
-        backgroundColor: '#FFF8E1',
-        padding: 12,
-        borderRadius: 12,
-        borderLeftWidth: 4,
-        borderLeftColor: '#FFA000'
-    },
-    insightText: {
-        fontSize: 13,
-        color: '#5D4037',
-        marginBottom: 4,
-        fontWeight: '500'
-    },
-    // Button
     actionBtnWrapper: {
         marginBottom: 30,
         shadowColor: colors.primary,
@@ -473,7 +466,6 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: 'bold',
     },
-    // Output
     adviceContainer: {
         backgroundColor: 'white',
         borderRadius: 20,
@@ -496,8 +488,42 @@ const styles = StyleSheet.create({
     },
     adviceText: {
         fontSize: 15,
-        lineHeight: 24, // Good readability
+        lineHeight: 24,
         color: '#37474F',
+    },
+    citationsContainer: {
+        marginTop: 20,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: '#EEEEEE'
+    },
+    citationsTitle: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: colors.textSecondary,
+        marginBottom: 8,
+        textTransform: 'uppercase'
+    },
+    chipsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+    },
+    chip: {
+        backgroundColor: '#E0F2F1',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 8,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#B2DFDB'
+    },
+    chipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#00695C'
     },
     disclaimer: {
         marginTop: 20,

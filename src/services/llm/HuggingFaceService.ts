@@ -1,5 +1,6 @@
 import { HfInference } from "@huggingface/inference";
 import { HF_TOKEN } from "@env";
+import { getPersonaPrompt } from "./PersonaPrompts";
 
 // Initialize the client with the token from .env
 const client = new HfInference(HF_TOKEN);
@@ -61,6 +62,62 @@ export const getAIAdvice = async (
     } catch (error) {
         console.error("HF Inference Error (Advice):", error);
         throw error; // Let screen handle error
+    }
+};
+
+/**
+ * Generates structured advice with citations (Cloud)
+ */
+export const getStructuredAIAdvice = async (
+    persona: string,
+    userPrompt: string
+): Promise<any> => {
+    try {
+        const systemPrompt = getPersonaPrompt(persona);
+
+        // Structure rules for JSON output
+        const structureNote = `
+        IMPORTANT: Your entire response MUST be valid JSON.
+        Match this exactly:
+        {
+          "advice": "Full text...",
+          "citations": [
+             { "type": "category", "id": "CategoryName", "label": "See Category" }
+          ]
+        }
+        
+        ## DATA RULES:
+        Do not cite false data. Use figures that are true from the input only.
+        `;
+
+        const response = await client.chatCompletion({
+            model: "Qwen/Qwen2.5-7B-Instruct",
+            messages: [
+                { role: "system", content: `${systemPrompt}\n${structureNote}` },
+                { role: "user", content: userPrompt }
+            ],
+            max_tokens: 800,
+            temperature: 0.7,
+            response_format: { type: "json_object" }
+        });
+
+        const content = response.choices[0].message.content || "{}";
+        console.log("Cloud AI: Raw response:", content);
+
+        // Robust extraction (same logic as LlmClient but simplified for json_object mode)
+        const firstBrace = content.indexOf('{');
+        const lastBrace = content.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1) {
+            return JSON.parse(content.substring(firstBrace, lastBrace + 1));
+        }
+        return JSON.parse(content);
+
+    } catch (error) {
+        console.error("HF Structured Advice Error:", error);
+        return {
+            advice: "Cloud AI failed to process your request. Please check connection.",
+            citations: []
+        };
     }
 };
 

@@ -1,14 +1,15 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, Platform, Alert, RefreshControl } from 'react-native';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, Platform, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useRoute } from '@react-navigation/native';
 import { LineChart, PieChart } from "react-native-gifted-charts";
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { Check, ChevronDown, TrendingDown, TrendingUp, Info } from 'lucide-react-native';
+import { TrendingUp, Info } from 'lucide-react-native';
 import { DailyBreakdownSheet } from '../components/DailyBreakdownSheet';
+import { MonthPicker } from '../components/MonthPicker';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -25,11 +26,12 @@ const CHART_COLORS = [
     '#607D8B', // Blue Grey
 ];
 
-type TimeFrame = 'week' | 'month' | 'last_month';
-
 export default function AnalyticsScreen() {
     const insets = useSafeAreaInsets();
-    const [timeFrame, setTimeFrame] = useState<TimeFrame>('month');
+    const route = useRoute<any>();
+
+    // Date State (Replaces TimeFrame)
+    const [currentDate, setCurrentDate] = useState(new Date());
     const [loading, setLoading] = useState(false);
 
     // Data State
@@ -48,36 +50,45 @@ export default function AnalyticsScreen() {
 
     // Helper state for chart scaling
     const [chartConfig, setChartConfig] = useState({ maxValue: 10000, stepValue: 2500, yAxisOffset: 0 });
-    const scrollOffsetRef = useRef(0); // Track chart scroll position for tooltip bounds
-    // Cache State to prevent creating lag
-    const analyticsCache = useRef<Record<TimeFrame, {
+    const scrollOffsetRef = useRef(0);
+
+    // Cache State: Key by "YYYY-MM" string
+    const analyticsCache = useRef<Record<string, {
         totalSpent: number;
         categoryData: any[];
         trendData: any[];
         topCategory: string;
         insightText: string;
         chartConfig: any;
-    } | null>>({ week: null, month: null, last_month: null });
+    }>>({});
 
-    // Initial Load
-    // useEffect removed to prevent double fetch
-
-    // Refetch on focus (with cache check)
+    // Refetch on focus or date change
+    // Using simple useEffect on currentDate change, plus focus effect for resume
     useFocusEffect(
         useCallback(() => {
+            // Check for navigation params
+            if (route.params?.date) {
+                const paramDate = new Date(route.params.date);
+                // Only update if different month to avoid loop
+                if (paramDate.getMonth() !== currentDate.getMonth() || paramDate.getFullYear() !== currentDate.getFullYear()) {
+                    setCurrentDate(paramDate);
+                    // Fetch will trigger via effect below or we call it
+                }
+            }
             fetchAnalytics();
-        }, [timeFrame])
+        }, [currentDate, route.params])
     );
 
-    // Memoized Chart Key to prevent unnecessary path recalculation
-    const chartKey = useMemo(() => `chart-${timeFrame}`, [timeFrame]);
+    const getMonthKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}`;
 
-    // Memoized Pie Data (Transform outside render)
+    // Memoized Chart Key
+    const chartKey = useMemo(() => `chart-${getMonthKey(currentDate)}`, [currentDate]);
+
+    // Memoized Pie Data
     const processedPieData = useMemo(() => {
         return categoryData.map(c => {
             const isFocused = focusedCategory && focusedCategory.name === c.name;
             const isAnyFocused = !!focusedCategory;
-            // Fade others if one is focused
             const color = (!isAnyFocused || isFocused) ? c.color : c.color + '50';
             return {
                 ...c,
@@ -88,11 +99,11 @@ export default function AnalyticsScreen() {
         });
     }, [categoryData, focusedCategory]);
 
-    const handleTimeFrameChange = (t: TimeFrame) => {
+    const handleDateChange = (newDate: Date) => {
         setLoading(true);
-        // Allow UI to update (spinner/tab) before mounting heavy chart
+        // Allow UI to update before fetch
         setTimeout(() => {
-            setTimeFrame(t);
+            setCurrentDate(newDate);
         }, 50);
     };
 
@@ -105,7 +116,6 @@ export default function AnalyticsScreen() {
         setSelectedDate(dateToFetch);
         setSelectedPoint({ label: dateToFetch, value: item.value });
 
-        // Use pre-fetched breakdown (already loaded during fetchAnalytics)
         const rawBreakdown = item.breakdown || [];
         const coloredCategories = rawBreakdown.map((cat: any, index: number) => {
             const existing = categoryData.find(c => c.name === cat.name);
@@ -129,7 +139,6 @@ export default function AnalyticsScreen() {
     };
 
     const handleCategoryPress = (item: any) => {
-        // Toggle focusing: If already focused, reset to top item (or null to show top)
         if (focusedCategory?.name === item.name) {
             setFocusedCategory(null);
         } else {
@@ -138,73 +147,47 @@ export default function AnalyticsScreen() {
     };
 
     const fetchAnalytics = async (forceRefresh = false) => {
-        const currentRequestTimeFrame = timeFrame; // Capture current timeframe
+        const cacheKey = getMonthKey(currentDate);
 
         // 1. Check Cache
-        if (!forceRefresh && analyticsCache.current[timeFrame]) {
-            const cached = analyticsCache.current[timeFrame]!;
-            if (currentRequestTimeFrame !== timeFrame) return; // Race condition check
-
+        if (!forceRefresh && analyticsCache.current[cacheKey]) {
+            const cached = analyticsCache.current[cacheKey];
             setTotalSpent(cached.totalSpent);
             setCategoryData(cached.categoryData);
             setTrendData(cached.trendData);
             setTopCategory(cached.topCategory);
             setInsightText(cached.insightText);
             setChartConfig(cached.chartConfig);
+            setLoading(false); // Ensure loading off
             return;
         }
 
         setLoading(true);
-        setFocusedCategory(null); // Reset focus on new fetch
-        const now = new Date();
+        setFocusedCategory(null);
+
+        // Calculate Date Range for chosen Month
         let startDate = '';
         let endDate = '';
 
-        // Calculate Date Ranges
-        if (timeFrame === 'week') {
-            const start = new Date(now);
-            start.setDate(now.getDate() - now.getDay()); // Sunday
-            start.setHours(0, 0, 0, 0);
-            startDate = start.toISOString();
+        // Start: 1st of month
+        const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        start.setHours(0, 0, 0, 0);
+        startDate = start.toISOString();
 
-            // End at NOW (Today)
-            const end = new Date(now);
-            end.setHours(23, 59, 59, 999);
-            endDate = end.toISOString();
-
-        } else if (timeFrame === 'month') {
-            // Start: 1st of current month
-            const start = new Date(now.getFullYear(), now.getMonth(), 1);
-            start.setHours(0, 0, 0, 0);
-            startDate = start.toISOString();
-
-            // End: NOW (Today)
-            const end = new Date(now);
-            end.setHours(23, 59, 59, 999);
-            endDate = end.toISOString();
-
-        } else if (timeFrame === 'last_month') {
-            // Start: 1st of previous month
-            const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            start.setHours(0, 0, 0, 0);
-            startDate = start.toISOString();
-
-            // End: Last day of previous month
-            const end = new Date(now.getFullYear(), now.getMonth(), 0);
-            end.setHours(23, 59, 59, 999);
-            endDate = end.toISOString();
-        }
+        // End: Last day of month
+        const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+        end.setHours(23, 59, 59, 999);
+        endDate = end.toISOString();
 
         try {
             const repository = new ExpenseRepository();
 
-            // 1. Category Totals (for Donut)
+            // 1. Category Totals
             const catTotals = await repository.getCategoryTotals(startDate, endDate);
 
-            // Check race condition AGAIN after await
-            if (currentRequestTimeFrame !== timeFrame) return;
+            // Race Check
+            if (getMonthKey(currentDate) !== cacheKey) return;
 
-            // Sort by Total Descending
             catTotals.sort((a, b) => b.total - a.total);
 
             let sum = 0;
@@ -215,41 +198,63 @@ export default function AnalyticsScreen() {
                     color: CHART_COLORS[index % CHART_COLORS.length],
                     text: c.name,
                     name: c.name,
-                    // Interaction Props
                     onPress: () => handleCategoryPress({ name: c.name, value: c.total, color: CHART_COLORS[index % CHART_COLORS.length] }),
-                    focused: false, // Will be handled by render logic or state
+                    focused: false,
                 };
             });
 
             const highest = pieData.length > 0 ? pieData[0].name : '';
 
-            setTotalSpent(sum);
-            setCategoryData(pieData);
-            setTopCategory(highest);
+            // Handle Deep Link Focus
+            if (route.params?.focusCategory) {
+                const target = pieData.find(p => p.name === route.params.focusCategory);
+                if (target) {
+                    setFocusedCategory({
+                        name: target.name,
+                        value: target.value,
+                        color: target.color
+                    });
+                }
+            }
+            else if (!focusedCategory) {
+                setFocusedCategory(null);
+            }
 
-            // 2. Daily Trends (for Line Chart)
+            // Handle Deep Link Focus
+            if (route.params?.focusCategory) {
+                const target = pieData.find(p => p.name === route.params.focusCategory);
+                if (target) {
+                    setFocusedCategory({
+                        name: target.name,
+                        value: target.value,
+                        color: target.color
+                    });
+                    // Clear param to avoid re-focusing on swipe back? 
+                    // React Navigation params stay unless cleared. 
+                    // For now, it's fine as user likely wants to see what they clicked.
+                }
+            }
+            // Only defaults to null if NO param
+            else if (!focusedCategory) {
+                setFocusedCategory(null);
+            }
+
+            // 2. Daily Trends
             const rawDaily = await repository.getDailyTotals(startDate, endDate);
 
-            // Check race condition AGAIN after await
-            if (currentRequestTimeFrame !== timeFrame) return;
+            if (getMonthKey(currentDate) !== cacheKey) return;
 
             // Fill missing dates with 0
             const daily: { day: string; total: number }[] = [];
-            const start = new Date(startDate);
-            const end = new Date(endDate);
+            const dStart = new Date(startDate); // Local
+            const dEnd = new Date(endDate); // Local
 
-            // Timezone-safe iteration: 
-            // We iterate day-by-day adding 24hrs, but rely on ISO string slicing 
-            // which can be tricky. Better: use the logic we set up for start/end.
-
-            const current = new Date(start);
-            // Reset to prevent any time drift issues
-            current.setHours(12, 0, 0, 0); // Noon prevents DST shifts affecting date
-            const endCompare = new Date(end);
+            const current = new Date(dStart);
+            current.setHours(12, 0, 0, 0);
+            const endCompare = new Date(dEnd);
             endCompare.setHours(12, 0, 0, 0);
 
             while (current <= endCompare) {
-                // Manually construct YYYY-MM-DD to match DB
                 const y = current.getFullYear();
                 const m = String(current.getMonth() + 1).padStart(2, '0');
                 const d = String(current.getDate()).padStart(2, '0');
@@ -261,78 +266,57 @@ export default function AnalyticsScreen() {
                 current.setDate(current.getDate() + 1);
             }
 
-
-            // 2. NEW: Fetch Breakdown for Tooltips (Batch)
+            // 2. NEW: Batch Breakdown
             let breakdownMap: Record<string, any[]> = {};
             if (daily.length > 0) {
                 const days = daily.map(d => d.day).sort();
-                const startDate = days[0];
-                const endDate = days[days.length - 1];
-                // Color Mapping: Match breakdown categories to global chart colors
-                breakdownMap = await repository.getDailyBreakdownInRange(startDate, endDate);
-
-                // Post-process to add colors from frontend state or palette
+                const sDate = days[0];
+                const eDate = days[days.length - 1];
+                breakdownMap = await repository.getDailyBreakdownInRange(sDate, eDate);
                 Object.values(breakdownMap).forEach(dayItems => {
                     dayItems.forEach((item: any) => {
-                        // Find matching category in pieData to get its consistent color
                         const existingCat = pieData.find(p => p.name === item.name);
                         item.color = existingCat ? existingCat.color : '#ccc';
                     });
                 });
             }
 
-            // Map to gifted-charts format
             const lineData = daily.map(d => ({
-                value: d.total || 0, // Ensure no nulls
-                label: parseInt(d.day.slice(8)).toString(), // "01" -> "1"
+                value: d.total || 0,
+                label: parseInt(d.day.slice(8)).toString(),
                 dataPointText: '',
-                // Custom properties for interaction
                 date: d.day,
                 amount: d.total || 0,
-                breakdown: breakdownMap[d.day] || [], // Inject Breakdown Data
-
-                // Tap-to-drawer interaction
+                breakdown: breakdownMap[d.day] || [],
                 onPress: () => handlePointPress({ label: d.day, value: d.total || 0, date: d.day, breakdown: breakdownMap[d.day] || [] }),
-
                 labelTextStyle: { color: colors.textSecondary, fontSize: 10, width: 30, textAlign: 'center' },
                 dataPointRadius: 6,
                 dataPointColor: colors.primary,
             }));
 
-            console.log(`[Analytics] Line Data Points: ${lineData.length}`, lineData[0], lineData[lineData.length - 1]);
-
-            // Y-Axis Dynamic Scaling (from DAILY data points, not aggregates)
+            // Y-Axis Scaling
             const dailyValues = lineData.map(d => d.value);
             const dataMin = Math.min(...dailyValues, 0);
-            const dataMax = Math.max(...dailyValues, 100); // Ensure non-zero
-
-            // Add 10% padding for visual breathing room
+            const dataMax = Math.max(...dailyValues, 100);
             const range = dataMax - dataMin;
             const padding = range * 0.1;
-            const yMin = Math.max(0, dataMin - padding); // Don't go below 0 for expenses
+            const yMin = Math.max(0, dataMin - padding);
             const yMax = dataMax + padding;
-
-            // Calculate smart step size based on magnitude
             const magnitude = Math.pow(10, Math.floor(Math.log10(yMax - yMin)));
             const rawStep = (yMax - yMin) / 4;
             let step = Math.ceil(rawStep / (magnitude / 2)) * (magnitude / 2);
-
-            // Ensure step is at least 1
             if (step < 1) step = 1;
 
-            // Calculate final chart bounds (exactly 4 sections)
             const sections = 4;
             const chartMax = yMin + (step * sections);
             const chartMin = yMin;
 
-            // Store chart configuration
             const newConfig = {
                 maxValue: chartMax,
                 stepValue: step,
-                yAxisOffset: chartMin // Used to shift baseline
+                yAxisOffset: chartMin
             };
 
-            // 3. Simple Insight Generation
             let newInsightText = "No spending recorded for this period.";
             if (sum > 0) {
                 const top = pieData[0];
@@ -340,7 +324,6 @@ export default function AnalyticsScreen() {
                 newInsightText = `Top spending: ${top.name} takes up ${percentage}% of your budget.`;
             }
 
-            // Update State
             setTotalSpent(sum);
             setCategoryData(pieData);
             setTrendData(lineData);
@@ -348,8 +331,7 @@ export default function AnalyticsScreen() {
             setInsightText(newInsightText);
             setChartConfig(newConfig);
 
-            // Update Cache
-            analyticsCache.current[timeFrame] = {
+            analyticsCache.current[cacheKey] = {
                 totalSpent: sum,
                 categoryData: pieData,
                 trendData: lineData,
@@ -361,8 +343,7 @@ export default function AnalyticsScreen() {
         } catch (e) {
             console.error("[Analytics] Error:", e);
         } finally {
-            // Only clear loading if we are still on the active request
-            if (currentRequestTimeFrame === timeFrame) {
+            if (getMonthKey(currentDate) === cacheKey) {
                 setLoading(false);
             }
         }
@@ -399,257 +380,156 @@ export default function AnalyticsScreen() {
                 showNotification={false}
             />
 
-            <ScrollView
-                style={{ flex: 1 }}
-                contentContainerStyle={{ paddingBottom: 120 }}
-                refreshControl={<RefreshControl refreshing={loading} onRefresh={() => fetchAnalytics(true)} />}
-            >
-                {/* 1. Time Frame Tabs (Segmented Control Style) */}
-                <View style={styles.tabWrapper}>
-                    <View style={styles.tabContainer}>
-                        {(['week', 'month', 'last_month'] as TimeFrame[]).map((t) => (
-                            <TouchableOpacity
-                                key={t}
-                                style={[styles.tab, timeFrame === t && styles.activeTab]}
-                                onPress={() => handleTimeFrameChange(t)}
-                            >
-                                <Text style={[styles.tabText, timeFrame === t && styles.activeTabText]}>
-                                    {t === 'last_month' ? 'Last Month' : t.charAt(0).toUpperCase() + t.slice(1)}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
+            <View style={{ flex: 1 }}>
+                {/* 1. Month Picker (Replaces Tabs) */}
+                <MonthPicker date={currentDate} onChange={handleDateChange} />
 
-                {loading && trendData.length === 0 ? (
-                    <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 50 }} />
-                ) : (
-                    <View>
-                        {/* 2. Hero Card (Gradient or Solid Primary) */}
-                        <View style={styles.heroCard}>
-                            <View>
-                                <Text style={styles.heroLabel}>TOTAL SPENT</Text>
-                                <Text style={styles.heroAmount}>Ksh {totalSpent.toLocaleString()}</Text>
-                            </View>
-                            <View style={styles.trendBadge}>
-                                <TrendingUp size={16} color="white" />
-                                <Text style={styles.trendText}>Insights Ready</Text>
-                            </View>
-                        </View>
-
-                        {/* 3. Donut Chart Card */}
-                        <View style={styles.chartCard}>
-                            <View style={styles.cardHeader}>
-                                <Text style={styles.cardTitle}>Category Breakdown</Text>
+                <ScrollView
+                    style={{ flex: 1 }}
+                    contentContainerStyle={{ paddingBottom: 120, paddingTop: 10 }}
+                    refreshControl={<RefreshControl refreshing={loading} onRefresh={() => fetchAnalytics(true)} />}
+                >
+                    {loading && trendData.length === 0 ? (
+                        <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 50 }} />
+                    ) : (
+                        <View>
+                            {/* 2. Hero Card */}
+                            <View style={styles.heroCard}>
+                                <View>
+                                    <Text style={styles.heroLabel}>TOTAL SPENT</Text>
+                                    <Text style={styles.heroAmount}>Ksh {totalSpent.toLocaleString()}</Text>
+                                </View>
+                                <View style={styles.trendBadge}>
+                                    <TrendingUp size={16} color="white" />
+                                    <Text style={styles.trendText}>Monthly View</Text>
+                                </View>
                             </View>
 
-                            <View style={{ alignItems: 'center', marginVertical: 10 }}>
-                                {categoryData.length > 0 ? (
-                                    <PieChart
-                                        data={processedPieData}
-                                        donut
-                                        // showGradient // Disabled to prevent url(#grad0) error
-                                        sectionAutoFocus
-                                        radius={100}
-                                        innerRadius={65}
-                                        innerCircleColor={colors.surface}
-                                        centerLabelComponent={() => {
-                                            const activeItem = focusedCategory || (categoryData.length > 0 ? categoryData[0] : null);
-                                            const percentage = activeItem ? Math.round((activeItem.value / totalSpent) * 100) : 0;
-                                            const amountText = activeItem
-                                                ? (activeItem.value >= 1000
-                                                    ? `Ksh ${(activeItem.value / 1000).toFixed(1)}k`
-                                                    : `Ksh ${activeItem.value.toLocaleString()}`)
-                                                : '0';
+                            {/* 3. Donut Chart Card */}
+                            <View style={styles.chartCard}>
+                                <View style={styles.cardHeader}>
+                                    <Text style={styles.cardTitle}>Breakdown</Text>
+                                </View>
 
-                                            return (
-                                                <View style={{ justifyContent: 'center', alignItems: 'center' }}>
-                                                    <Text style={{ fontSize: 28, color: colors.text, fontWeight: '800' }}>
-                                                        {percentage}%
-                                                    </Text>
-                                                    <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 4 }}>
-                                                        {amountText}
-                                                    </Text>
-                                                    <Text style={{ fontSize: 10, color: colors.textSecondary, fontWeight: '600', textTransform: 'uppercase' }}>
-                                                        {activeItem?.name || 'No Data'}
-                                                    </Text>
-                                                </View>
-                                            );
-                                        }}
-                                    />
-                                ) : (
-                                    <View style={styles.noDataContainer}>
-                                        <Text style={styles.noDataText}>No data for this period</Text>
-                                    </View>
-                                )}
-                            </View>
-                            {renderLegend()}
-                        </View>
-
-                        {/* 4. Line Chart Card */}
-                        <View style={styles.chartCard}>
-                            <View style={styles.cardHeader}>
-                                <Text style={styles.cardTitle}>Spending Trend</Text>
-                                {selectedPoint ? (
-                                    <Text style={styles.cardSubtitle}>
-                                        {selectedPoint.label}: Ksh {selectedPoint.value.toLocaleString()}
-                                    </Text>
-                                ) : (
-                                    <Text style={[styles.cardSubtitle, { fontSize: 10, fontStyle: 'italic' }]}>
-                                        Tap a point for daily details
-                                    </Text>
-                                )}
-                            </View>
-
-                            <View style={{ paddingVertical: 20, overflow: 'hidden' }}>
-                                {trendData.length > 0 ? (
-                                    <LineChart
-                                        key={chartKey} // ONLY changes when timeframe changes
-                                        data={trendData}
-                                        color={colors.primary}
-                                        thickness={3}
-
-                                        startFillColor={colors.primary}
-                                        endFillColor={colors.primary}
-                                        startOpacity={0.2}
-                                        endOpacity={0.05}
-                                        initialSpacing={20}
-                                        spacing={50} // Ensure scrollable width > container
-                                        // xAxisLabelShift={-20}
-                                        noOfSections={4}
-                                        maxValue={Number(chartConfig.maxValue) || 10000}
-                                        stepValue={Number(chartConfig.stepValue) || 2500}
-                                        yAxisOffset={Number(chartConfig.yAxisOffset) || 0} // Shifts baseline for dynamic min
-                                        // Y-Axis: Standard Scale
-                                        hideYAxisText={false}
-                                        yAxisThickness={0}
-                                        yAxisTextStyle={{ color: colors.textSecondary, fontSize: 10 }} // Visible
-                                        yAxisLabelWidth={35}
-                                        formatYLabel={(label: string) => {
-                                            const val = Number(label) + (Number(chartConfig.yAxisOffset) || 0);
-                                            // Precision Logic: 1.9k instead of 2k
-                                            if (val >= 1000) return (val / 1000).toFixed(val < 10000 ? 1 : 0) + 'k';
-                                            return val.toFixed(0);
-                                        }}
-                                        xAxisColor={'#ddd'}
-                                        xAxisLabelTextStyle={{ color: colors.textSecondary, fontSize: 10 }}
-                                        hideRules
-                                        // Scroll Logic: Width must be container width
-                                        width={SCREEN_WIDTH - 80}
-                                        // @ts-ignore
-                                        scrollable
-                                        onScroll={(e: any) => {
-                                            scrollOffsetRef.current = e?.nativeEvent?.contentOffset?.x ?? 0;
-                                        }}
-                                        scrollEventThrottle={16}
-                                        // Dips Fix: Disable curve or set VERY low
-                                        curved
-                                        curveType={1} // Monotone Cubic - prevents overshoots
-                                        isAnimated={false} // Disable animation to stop the "hanging line" logic
-                                        areaChart
-                                        // Touch: per-item onPress (doesn't interfere with scroll)
-                                        onPress={undefined}
-                                        focusEnabled={false}
-                                        dataPointsRadius={10}
-                                        dataPointsColor={colors.primary}
-                                        // @ts-ignore — TEST: disable pointer to test tap-to-drawer
-                                        pointerConfig={false && {
-                                            activatePointersOnLongPress: true,
-                                            pointerVanishDelay: 10000,
-                                            pointerStripWidth: 2,
-                                            pointerStripColor: '#e0e0e0',
-                                            pointerStripUptoDataPoint: true,
-                                            pointerColor: colors.primary,
-                                            radius: 5,
-                                            pointerLabelWidth: 140,
-                                            pointerLabelHeight: 300,
-                                            autoAdjustPointerLabelPosition: false,
-                                            pointerLabelComponent: (items: any[]) => {
-                                                const item = items[0];
-                                                const breakdown = item.breakdown || [];
-
-                                                // --- Viewport-Relative Bounds Checking ---
-                                                const TOOLTIP_W = 140;
-                                                const HALF = TOOLTIP_W / 2; // 70
-                                                const INIT_SPACING = 20;
-                                                const SPACING = 50;
-                                                const PADDING = 15;
-                                                const VIEWPORT_W = SCREEN_WIDTH - 80;
-                                                const maxVal = Number(chartConfig.maxValue) || 10000;
-
-                                                // Find actual index (pointerIndex is undefined in this library)
-                                                const idx = trendData.findIndex(d => d.date === item.date);
-                                                const contentX = INIT_SPACING + (idx >= 0 ? idx : 0) * SPACING;
-
-                                                // Viewport X = content position - scroll offset
-                                                const viewportX = contentX - scrollOffsetRef.current;
-
-                                                // Default: center tooltip over point
-                                                let marginLeft = -HALF; // -70
-
-                                                // Left edge: would tooltip left extend past viewport left?
-                                                if (viewportX - HALF < 0) {
-                                                    const overshoot = Math.abs(viewportX - HALF);
-                                                    marginLeft = -HALF + overshoot + PADDING;
-                                                }
-
-                                                // Right edge: would tooltip right extend past viewport right?
-                                                if (viewportX + HALF > VIEWPORT_W) {
-                                                    const overshoot = (viewportX + HALF) - VIEWPORT_W;
-                                                    marginLeft = -HALF - overshoot - PADDING;
-                                                }
-
-                                                // Top edge: is the point near the top of the chart?
-                                                let marginTop = -50; // Default: above
-                                                const valueRatio = item.value / maxVal;
-                                                if (valueRatio > 0.70) {
-                                                    marginTop = 20; // Flip well below the point
-                                                }
+                                <View style={{ alignItems: 'center', marginVertical: 10 }}>
+                                    {categoryData.length > 0 ? (
+                                        <PieChart
+                                            data={processedPieData}
+                                            donut
+                                            sectionAutoFocus
+                                            radius={100}
+                                            innerRadius={65}
+                                            innerCircleColor={colors.surface}
+                                            centerLabelComponent={() => {
+                                                const activeItem = focusedCategory || (categoryData.length > 0 ? categoryData[0] : null);
+                                                const percentage = activeItem ? Math.round((activeItem.value / totalSpent) * 100) : 0;
+                                                const amountText = activeItem
+                                                    ? (activeItem.value >= 1000
+                                                        ? `Ksh ${(activeItem.value / 1000).toFixed(1)}k`
+                                                        : `Ksh ${activeItem.value.toLocaleString()}`)
+                                                    : '0';
 
                                                 return (
-                                                    <View style={[styles.pointerContainer, { marginLeft, marginTop }]}>
-                                                        <Text style={styles.pointerDate}>{item.date}</Text>
-                                                        <View style={styles.pointerBubble}>
-                                                            <Text style={styles.pointerTotal}>
-                                                                Ksh {item.value.toLocaleString()}
-                                                            </Text>
-                                                            {breakdown.map((cat: any, index: number) => (
-                                                                <View key={index} style={styles.pointerRow}>
-                                                                    <View style={[styles.pointerDot, { backgroundColor: cat.color || '#ccc' }]} />
-                                                                    <Text style={styles.pointerCatName} numberOfLines={1}>
-                                                                        {cat.name}
-                                                                    </Text>
-                                                                    <Text style={styles.pointerCatAmount}>
-                                                                        {cat.amount < 1000 ? cat.amount : (cat.amount / 1000).toFixed(1) + 'k'}
-                                                                    </Text>
-                                                                </View>
-                                                            ))}
-                                                            {breakdown.length === 0 && (
-                                                                <Text style={styles.pointerHint}>No details</Text>
-                                                            )}
-                                                        </View>
+                                                    <View style={{ justifyContent: 'center', alignItems: 'center' }}>
+                                                        <Text style={{ fontSize: 28, color: colors.text, fontWeight: '800' }}>
+                                                            {percentage}%
+                                                        </Text>
+                                                        <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 4 }}>
+                                                            {amountText}
+                                                        </Text>
+                                                        <Text style={{ fontSize: 10, color: colors.textSecondary, fontWeight: '600', textTransform: 'uppercase' }}>
+                                                            {activeItem?.name || 'No Data'}
+                                                        </Text>
                                                     </View>
                                                 );
-                                            },
-                                        }}
-                                        scrollToEnd
-                                    />
-                                ) : (
-                                    <View style={styles.noDataContainer}>
-                                        <Text style={styles.noDataText}>No trend data yet</Text>
-                                    </View>
-                                )}
+                                            }}
+                                        />
+                                    ) : (
+                                        <View style={styles.noDataContainer}>
+                                            <Text style={styles.noDataText}>No data for this period</Text>
+                                        </View>
+                                    )}
+                                </View>
+                                {renderLegend()}
+                            </View>
+
+                            {/* 4. Line Chart Card */}
+                            <View style={styles.chartCard}>
+                                <View style={styles.cardHeader}>
+                                    <Text style={styles.cardTitle}>Daily Trend</Text>
+                                    {selectedPoint ? (
+                                        <Text style={styles.cardSubtitle}>
+                                            {selectedPoint.label}: Ksh {selectedPoint.value.toLocaleString()}
+                                        </Text>
+                                    ) : (
+                                        <Text style={[styles.cardSubtitle, { fontSize: 10, fontStyle: 'italic' }]}>
+                                            Tap points for details
+                                        </Text>
+                                    )}
+                                </View>
+
+                                <View style={{ paddingVertical: 20, overflow: 'hidden' }}>
+                                    {trendData.length > 0 ? (
+                                        <LineChart
+                                            key={chartKey}
+                                            data={trendData}
+                                            color={colors.primary}
+                                            thickness={3}
+                                            startFillColor={colors.primary}
+                                            endFillColor={colors.primary}
+                                            startOpacity={0.2}
+                                            endOpacity={0.05}
+                                            initialSpacing={20}
+                                            spacing={50}
+                                            noOfSections={4}
+                                            maxValue={Number(chartConfig.maxValue) || 10000}
+                                            stepValue={Number(chartConfig.stepValue) || 2500}
+                                            yAxisOffset={Number(chartConfig.yAxisOffset) || 0}
+                                            hideYAxisText={false}
+                                            yAxisThickness={0}
+                                            yAxisTextStyle={{ color: colors.textSecondary, fontSize: 10 }}
+                                            yAxisLabelWidth={35}
+                                            formatYLabel={(label: string) => {
+                                                const val = Number(label) + (Number(chartConfig.yAxisOffset) || 0);
+                                                if (val >= 1000) return (val / 1000).toFixed(val < 10000 ? 1 : 0) + 'k';
+                                                return val.toFixed(0);
+                                            }}
+                                            xAxisColor={'#ddd'}
+                                            xAxisLabelTextStyle={{ color: colors.textSecondary, fontSize: 10 }}
+                                            hideRules
+                                            width={SCREEN_WIDTH - 80}
+                                            // @ts-ignore
+                                            scrollable
+                                            onScroll={(e: any) => {
+                                                scrollOffsetRef.current = e?.nativeEvent?.contentOffset?.x ?? 0;
+                                            }}
+                                            scrollEventThrottle={16}
+                                            curved
+                                            curveType={1}
+                                            isAnimated={false}
+                                            areaChart
+                                            onPress={undefined}
+                                            focusEnabled={false}
+                                            dataPointsRadius={10}
+                                            dataPointsColor={colors.primary}
+                                        />
+                                    ) : (
+                                        <View style={styles.noDataContainer}>
+                                            <Text style={styles.noDataText}>No trend data yet</Text>
+                                        </View>
+                                    )}
+                                </View>
+                            </View>
+
+                            {/* 5. Insight */}
+                            <View style={styles.insightCard}>
+                                <Info size={20} color={colors.info} style={{ marginRight: 10 }} />
+                                <Text style={styles.insightText}>{insightText}</Text>
                             </View>
                         </View>
-
-                        {/* 5. Insight/Summary Text */}
-                        <View style={styles.insightCard}>
-                            <Info size={20} color={colors.info} style={{ marginRight: 10 }} />
-                            <Text style={styles.insightText}>{insightText}</Text>
-                        </View>
-                    </View>
-                )}
-            </ScrollView>
+                    )}
+                </ScrollView>
+            </View>
 
             <DailyBreakdownSheet
                 date={selectedDate}
@@ -665,38 +545,6 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: colors.background,
     },
-    tabWrapper: {
-        paddingHorizontal: 20,
-        paddingVertical: 15,
-    },
-    tabContainer: {
-        flexDirection: 'row',
-        backgroundColor: '#E0E0E0',
-        borderRadius: 20,
-        padding: 4,
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 8,
-        alignItems: 'center',
-        borderRadius: 16,
-    },
-    activeTab: {
-        backgroundColor: colors.surface,
-        elevation: 2,
-        shadowColor: 'black',
-        shadowOpacity: 0.1,
-        shadowRadius: 2,
-    },
-    tabText: {
-        ...typography.caption,
-        fontWeight: '600',
-        color: colors.textSecondary
-    },
-    activeTabText: {
-        color: colors.text,
-        fontWeight: 'bold'
-    },
     // Hero
     heroCard: {
         marginHorizontal: 20,
@@ -707,12 +555,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        // Shadow
-        shadowColor: colors.primary,
-        shadowOpacity: 0.4,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 6 },
         elevation: 8,
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
     },
     heroLabel: {
         color: 'rgba(255,255,255,0.8)',
@@ -725,7 +572,6 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 32,
         fontWeight: '800',
-        fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
     },
     trendBadge: {
         flexDirection: 'row',
@@ -748,11 +594,6 @@ const styles = StyleSheet.create({
         marginBottom: 20,
         borderRadius: 24,
         padding: 20,
-        // Soft Shadow
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
         elevation: 2,
     },
     cardHeader: {
@@ -799,92 +640,25 @@ const styles = StyleSheet.create({
         marginRight: 6,
     },
     legendText: {
-        color: colors.textSecondary,
         fontSize: 12,
-        fontWeight: '500',
+        color: colors.textSecondary,
     },
     // Insight
     insightCard: {
-        marginHorizontal: 20,
-        marginBottom: 20,
-        padding: 16,
-        backgroundColor: colors.surface, // or info light color
-        borderRadius: 16,
         flexDirection: 'row',
         alignItems: 'center',
+        backgroundColor: '#E3F2FD',
+        marginHorizontal: 20,
+        marginBottom: 30,
+        padding: 16,
+        borderRadius: 16,
         borderLeftWidth: 4,
-        borderLeftColor: colors.info,
+        borderLeftColor: colors.info
     },
     insightText: {
-        ...typography.body,
-        fontSize: 14,
+        flex: 1,
         color: colors.text,
-        flex: 1,
-    },
-    // Pointer Tooltip
-    pointerContainer: {
-        height: 120,
-        width: 140,
-        justifyContent: 'center',
-        marginTop: -50,
-        marginLeft: -70, // Center (140/2)
-    },
-    pointerDate: {
-        color: colors.textSecondary,
-        fontSize: 10,
-        textAlign: 'center',
-        fontWeight: 'bold',
-        marginBottom: 4,
-    },
-    pointerBubble: {
-        paddingHorizontal: 8,
-        paddingVertical: 8,
-        borderRadius: 10,
-        backgroundColor: 'rgba(30,30,30, 0.95)', // Dark semi-transparent
-        width: 130,
-        alignItems: 'stretch',
-        elevation: 8,
-        shadowColor: '#000',
-        shadowOpacity: 0.3,
-        shadowRadius: 6,
-    },
-    pointerTotal: {
-        color: 'white',
-        fontSize: 14,
-        fontWeight: '800',
-        textAlign: 'center',
-        marginBottom: 6,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.2)',
-        paddingBottom: 4,
-    },
-    pointerRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 2,
-    },
-    pointerDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        marginRight: 4,
-    },
-    pointerCatName: {
-        color: '#ccc',
-        fontSize: 10,
-        flex: 1,
-        marginRight: 4,
-    },
-    pointerCatAmount: {
-        color: 'white',
-        fontSize: 10,
-        fontWeight: '600',
-    },
-    pointerHint: {
-        color: '#888',
-        fontSize: 9,
-        textAlign: 'center',
-        fontStyle: 'italic',
-    },
+        fontSize: 13,
+        lineHeight: 20
+    }
 });

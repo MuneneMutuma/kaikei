@@ -597,7 +597,8 @@ export class ExpenseRepository {
     public async getAdviceContext(): Promise<{
         currentMonth: { total: number, breakdown: { name: string, total: number }[] },
         history: { month: string, total: number }[],
-        insights: string[] // Pre-calculated insights (e.g. "Fuel is up 20%")
+        insights: string[], // Pre-calculated insights (e.g. "Fuel is up 20%")
+        topTransactions: Expense[] // NEW: For citing specific large expenses
     }> {
         const now = new Date();
         const currentMonth = now.getMonth() + 1;
@@ -655,13 +656,28 @@ export class ExpenseRepository {
             }
         });
 
+        // 4. NEW: Top Transactions (Largest 5 this month)
+        const topTxResult = await this.db.execute(
+            `SELECT e.*, c.name as categoryName 
+             FROM expenses e
+             LEFT JOIN categories c ON e.categoryId = c.id
+             WHERE datetime(e.date, 'localtime') LIKE ? 
+             AND e.type = 'expense'
+             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+             ORDER BY e.amount DESC
+             LIMIT 5`,
+            [`${currentYear}-${currentMonth.toString().padStart(2, '0')}%`]
+        );
+        const topTransactions = Database.getRows(topTxResult) as Expense[];
+
         return {
             currentMonth: {
                 total: currentSummary.totalExpense,
                 breakdown: currentBreakdown
             },
             history: history.reverse(), // Oldest first
-            insights
+            insights,
+            topTransactions
         };
     }
 

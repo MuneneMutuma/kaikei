@@ -12,32 +12,16 @@ import {
     NativeEventEmitter,
     TextInput,
     Modal,
-    FlatList,
-    ScrollView
+    FlatList
 } from "react-native";
-import AudioRecord from "react-native-audio-record"; // Keeping for Whisper backup
-import RNFS from "react-native-fs";
-import { initWhisper, WhisperContext } from "whisper.rn";
+import { OfflineVoiceGuide } from "../components/OfflineVoiceGuide";
+import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
+import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { LlmClient } from '../services/llm/LlmClient';
 
 // Custom Native Module
 const { VoiceModule } = NativeModules;
 const voiceEmitter = new NativeEventEmitter(VoiceModule);
-
-// --- WHISPER CONFIG (BACKUP) --- 
-const WHISPER_OPTIONS = {
-    sampleRate: 16000,
-    channels: 1,
-    bitsPerSample: 16,
-    audioSource: 1,
-    wavFile: 'voice_input.wav'
-};
-const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.en.bin`;
-
-import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
-import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
-
-import { LlmClient } from '../services/llm/LlmClient';
 
 interface VoiceInputProps {
     onSave?: (payload: { amount: number; category: string; note: string }) => void;
@@ -50,30 +34,17 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
     const [isProcessing, setIsProcessing] = useState(false);
     const [llmStatus, setLlmStatus] = useState<string>('');
     const [reviewData, setReviewData] = useState<{ amount: string, category: string, note: string } | null>(null);
+    const [showOfflineGuide, setShowOfflineGuide] = useState(false);
 
-    // Engine Choice: 'GSR' | 'WHISPER'
-    const ENGINE = 'GSR';
-
-    // Whisper State (Backup)
-    const [whisperReady, setWhisperReady] = useState(false);
-    const whisperContext = useRef<WhisperContext | null>(null);
     const parser = useRef(new NaturalLanguageParser());
     const repo = useRef(new ExpenseRepository());
 
     useEffect(() => {
-        if (ENGINE === 'GSR') {
-            setupGSR();
-        } else {
-            setupWhisper(); // Only if we switch back
-        }
+        setupGSR();
         return () => {
-            if (ENGINE === 'GSR') {
-                removeAllListeners();
-            }
+            removeAllListeners();
         };
     }, []);
-
-    // --- GOOGLE SPEECH IMPLEMENTATION ---
 
     const setupGSR = () => {
         try {
@@ -97,7 +68,7 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
 
     const onSpeechStart = () => {
         setIsRecording(true);
-        setResult(''); // Clear previous result
+        setResult('');
         setLlmStatus('');
     };
 
@@ -113,54 +84,42 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
 
     const onSpeechResults = (e: any) => {
         console.log("GSR Results Received", e);
-        // e.value is Array<string>
         if (e.value && e.value[0]) {
             const text = e.value[0];
             setResult(text);
-            // Trigger processing automatically on final result
             handleProcessTransaction(text);
         }
     };
 
     const onSpeechError = (e: any) => {
-        console.log('GSR Error:', e); // { code: 7, message: '...' }
+        console.log('GSR Error:', e);
         setIsRecording(false);
 
         // Error 7 = Network Error (Offline failed)
         // Error 13 = Language Unavailable (Offline Pack missing on Android 12+)
-        if (e.code === 7 || e.code === 13 || (e.message && e.message.toLowerCase().includes('network'))) {
-            Alert.alert(
-                "Offline Voice Not Ready",
-                "It seems you don't have the English/Swahili language pack installed for offline use.",
-                [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                        text: "Download Pack",
-                        onPress: openVoiceSettings
-                    }
-                ]
-            );
+        // Also check message content broadly
+        if (e.code === 7 || e.code === 13 ||
+            (e.message && (e.message.toLowerCase().includes('network') || e.message.toLowerCase().includes('offline')))) {
+            setShowOfflineGuide(true);
         }
     };
 
     const openVoiceSettings = () => {
         VoiceModule.openSettings();
+        setShowOfflineGuide(false);
     };
 
     const startGSR = async () => {
         setResult('');
         try {
-            // Request permissions first!
             const granted = await requestAndroidPermissions();
             if (!granted) {
                 Alert.alert("Permission", "Microphone permission needed.");
                 return;
             }
 
-            // Pass empty intent to use SYSTEM DEFAULT locale
-            // This fixes the mismatch where we ask for en-US but user has en-GB installed
             await VoiceModule.startListening({
-                locale: '',
+                locale: '', // System default
                 preferOffline: true
             });
         } catch (e) {
@@ -171,28 +130,14 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
     const stopGSR = async () => {
         try {
             await VoiceModule.stopListening();
-            // Do NOT manually process here. Result is not ready yet.
-            // onSpeechResults will handle it.
         } catch (e) {
             console.error(e);
         }
     };
 
-    // --- WHISPER IMPLEMENTATION (DETACHED / BACKUP) ---
-
-    const setupWhisper = async () => {
-        // ... (Existing Whisper setup logic, kept for reference)
-        // ...
-        // Initialize AudioRecord
-        AudioRecord.init(WHISPER_OPTIONS);
-        // ... Load Model ...
-    }
-
     async function requestAndroidPermissions() {
         if (Platform.OS !== "android") return true;
         try {
-            const androidVersion = Platform.Version;
-            // Android 12+ usually deals with permissions differently but RECORD_AUDIO is standard
             const granted = await PermissionsAndroid.request(
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
             );
@@ -210,23 +155,21 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
     const [isAddingCat, setIsAddingCat] = useState(false);
 
     useEffect(() => {
-        // Load categories on mount
-        const loadCats = () => {
-            const all = repo.current.getAllCategories();
+        const loadCats = async () => {
+            const all = await repo.current.getAllCategories();
             setCategories(all);
         };
         loadCats();
     }, []);
 
-    // --- COMMON PROCESSING ---
+    // --- PROCESSING ---
 
     const handleProcessTransaction = async (text: string) => {
         setIsProcessing(true);
         setLlmStatus('Extracting numbers...');
 
         try {
-            // HYBRID STRATEGY:
-            // 1. Regex (Trust Math)
+            // 1. Regex
             const regexResult = await parser.current.parse(text);
             const amount = regexResult?.amount || 0;
 
@@ -236,17 +179,15 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
                 return;
             }
 
-            // 2. LLM (Trust Intent)
+            // 2. LLM
             setLlmStatus('Thinking (AI)...');
             let category = regexResult?.categoryName || 'Other';
             let description = regexResult?.description || text;
 
             try {
-                // Only call LLM if simple regex didn't find a strong category match or for better descriptions
                 const llmClient = LlmClient.getInstance();
-                const availableCats = repo.current.getAllCategories().map(c => c.name);
+                const availableCats = categories.map(c => c.name);
 
-                // Race simple timeout (5s) for LLM
                 const llmPromise = llmClient.categorize(text, availableCats);
                 const timeoutPromise = new Promise<{ category?: string, description?: string }>((resolve) => setTimeout(() => resolve({}), 4000));
 
@@ -259,7 +200,6 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
                 console.warn("LLM failed, falling back to regex", llmErr);
             }
 
-            // 3. Finalize - Set Review Data INSTEAD of saving
             setLlmStatus('Done!');
             setReviewData({
                 amount: amount.toString(),
@@ -351,7 +291,6 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
         </Modal>
     );
 
-    // Render Review UI if we have data
     if (reviewData) {
         return (
             <View style={styles.container}>
@@ -424,7 +363,7 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
 
             <TouchableOpacity
                 style={{ marginTop: 20 }}
-                onPress={openVoiceSettings}
+                onPress={() => setShowOfflineGuide(true)}
             >
                 <Text style={{ color: '#2196F3' }}>⚙️ Offline Settings</Text>
             </TouchableOpacity>
@@ -442,6 +381,12 @@ const VoiceInput = ({ onSave }: VoiceInputProps) => {
                     <Text style={styles.resultText}>{result}</Text>
                 </View>
             ) : null}
+
+            <OfflineVoiceGuide
+                visible={showOfflineGuide}
+                onClose={() => setShowOfflineGuide(false)}
+                onOpenSettings={openVoiceSettings}
+            />
         </View>
     );
 };
@@ -496,10 +441,10 @@ const styles = StyleSheet.create({
         marginHorizontal: 5
     },
     btnCancel: {
-        backgroundColor: '#666', // Darker grey for white text contrast
+        backgroundColor: '#666',
     },
     btnConfirm: {
-        backgroundColor: '#3F51B5' // Using app primary color
+        backgroundColor: '#3F51B5'
     },
     btnText: {
         color: '#fff',
@@ -592,6 +537,3 @@ const styles = StyleSheet.create({
 });
 
 export default VoiceInput;
-
-
-
