@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, Alert } from 'react-native';
+import { pick, isCancel, types } from '@react-native-documents/picker';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { BackupService, BackupFile } from '../services/backup/BackupService';
@@ -13,6 +14,31 @@ interface RestorePickerModalProps {
 export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible, onClose, onSelect }) => {
     const [backups, setBackups] = useState<BackupFile[]>([]);
     const [loading, setLoading] = useState(true);
+
+    const pickDocument = async () => {
+        try {
+            const results = await pick({
+                type: [types.allFiles],
+            });
+
+            if (results && results.length > 0) {
+                const res = results[0];
+                // Construct a BackupFile-like object
+                onSelect({
+                    name: res.name || 'External Backup',
+                    path: res.uri,
+                    size: Number(res.size || 0),
+                    mtime: new Date(),
+                });
+            }
+        } catch (err) {
+            if (isCancel(err)) {
+                // User cancelled the picker
+            } else {
+                Alert.alert('Error', 'Failed to pick document: ' + (err as any).message);
+            }
+        }
+    };
 
     useEffect(() => {
         if (visible) {
@@ -58,7 +84,8 @@ export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible,
                             <View style={styles.emptyContainer}>
                                 <Text style={styles.emptyText}>No backups found</Text>
                                 <Text style={styles.emptyHint}>
-                                    Export your data first to create a backup in Downloads/KaikeiBackups
+                                    We couldn't find any backups in common folders.{"\n"}
+                                    Tap "Browse File..." below to select manually.
                                 </Text>
                             </View>
                         ) : (
@@ -85,6 +112,10 @@ export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible,
                     <View style={styles.footer}>
                         <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
                             <Text style={styles.cancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <View style={{ width: 12 }} />
+                        <TouchableOpacity style={styles.browseButton} onPress={pickDocument}>
+                            <Text style={styles.browseButtonText}>Browse File...</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -165,6 +196,8 @@ const styles = StyleSheet.create({
         padding: spacing.md,
         borderTopWidth: 1,
         borderTopColor: colors.border,
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
         alignItems: 'center',
     },
     cancelButton: {
@@ -177,5 +210,17 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600',
         color: colors.text,
+    },
+    browseButton: {
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        backgroundColor: colors.primary,
+        borderRadius: 12,
+        marginRight: 10,
+    },
+    browseButtonText: {
+        color: 'white',
+        fontWeight: '600',
+        fontSize: 16,
     },
 });

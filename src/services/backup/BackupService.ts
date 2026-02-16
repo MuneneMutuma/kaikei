@@ -47,27 +47,48 @@ export class BackupService {
     }
 
     /**
-     * List available backup files from the KaikeiBackups directory
+     * List available backup files from multiple potential directories
      */
     public async listBackups(): Promise<BackupFile[]> {
-        try {
-            const exists = await RNFS.exists(BACKUP_DIR);
-            if (!exists) return [];
+        console.log(`[BackupService] Starting backup scan...`);
+        const potentialDirs = [
+            BACKUP_DIR,
+            RNFS.DownloadDirectoryPath,
+            '/storage/emulated/0/Download', // Fallback for some Android versions
+        ];
 
-            const files = await RNFS.readDir(BACKUP_DIR);
-            return files
-                .filter(f => f.isFile() && f.name.endsWith('.json'))
-                .map(f => ({
-                    name: f.name,
-                    path: f.path,
-                    size: Number(f.size),
-                    mtime: new Date(f.mtime || 0),
-                }))
-                .sort((a, b) => b.mtime.getTime() - a.mtime.getTime()); // newest first
-        } catch (e) {
-            console.error('Failed to list backups:', e);
-            return [];
+        console.log(`[BackupService] Potential directories:`, potentialDirs);
+
+        const allFiles: BackupFile[] = [];
+        const seenPaths = new Set<string>();
+
+        for (const dir of potentialDirs) {
+            try {
+                const exists = await RNFS.exists(dir);
+                console.log(`[BackupService] Checking ${dir} - Exists: ${exists}`);
+                if (!exists) continue;
+
+                const branch = await RNFS.readDir(dir);
+                console.log(`[BackupService] Found ${branch.length} items in ${dir}`);
+                for (const f of branch) {
+                    if (f.isFile() && f.name.endsWith('.json') && f.name.includes('kaikei_backup') && !seenPaths.has(f.path)) {
+                        console.log(`[BackupService] Match found: ${f.name}`);
+                        allFiles.push({
+                            name: f.name,
+                            path: f.path,
+                            size: Number(f.size),
+                            mtime: new Date(f.mtime || 0),
+                        });
+                        seenPaths.add(f.path);
+                    }
+                }
+            } catch (e) {
+                console.warn(`[BackupService] Failed to scan directory ${dir}:`, e);
+            }
         }
+
+        console.log(`[BackupService] Scan complete. Total backups found: ${allFiles.length}`);
+        return allFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime()); // newest first
     }
 
     /**
@@ -78,8 +99,22 @@ export class BackupService {
         counts?: { expenses: number; categories: number; settings: number; ignored: number };
         error?: string;
     }> {
+        console.log(`[BackupService] Starting restore from: ${filePath}`);
+        let tempPath = filePath;
+        const isContentUri = filePath.startsWith('content://');
+
         try {
-            const fileContent = await RNFS.readFile(filePath, 'utf8');
+            if (isContentUri) {
+                console.log(`[BackupService] Handling content URI. Copying to cache...`);
+                tempPath = `${RNFS.CachesDirectoryPath}/temp_restore.json`;
+                if (await RNFS.exists(tempPath)) {
+                    await RNFS.unlink(tempPath);
+                }
+                await RNFS.copyFile(filePath, tempPath);
+                console.log(`[BackupService] Copy successful.`);
+            }
+
+            const fileContent = await RNFS.readFile(tempPath, 'utf8');
 
             // Basic validation
             const parsed = JSON.parse(fileContent);
@@ -88,11 +123,17 @@ export class BackupService {
             }
 
             const counts = await this.repo.importDataFromJSON(fileContent);
-            console.log(`Restore complete: ${counts.expenses} expenses, ${counts.categories} categories, ${counts.settings} settings, ${counts.ignored} ignored`);
+
+            // Cleanup temp file if we created one
+            if (isContentUri) {
+                await RNFS.unlink(tempPath);
+            }
+
+            console.log(`[BackupService] Restore complete: ${counts.expenses} expenses, ${counts.categories} categories`);
             return { success: true, counts };
 
         } catch (error: any) {
-            console.error("Restore Failed", error);
+            console.error("[BackupService] Restore Failed", error);
             return { success: false, error: error?.message || 'Unknown error during restore.' };
         }
     }
