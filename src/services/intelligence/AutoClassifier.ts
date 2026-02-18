@@ -1,6 +1,8 @@
 import { ExpenseRepository } from '../ledger/ExpenseRepository';
 import { LlmClient } from '../llm/LlmClient';
 import { ModelManager } from '../llm/ModelManager';
+import { IngestionEvents, INGESTION_EVENT } from '../ingestion/IngestionEvents';
+import { parseMpesaMessage } from '../../utils/mpesaParser';
 
 export class AutoClassifier {
     private static instance: AutoClassifier;
@@ -28,11 +30,26 @@ export class AutoClassifier {
         this.listeners.forEach(cb => cb(status, processing));
     }
 
-    public start() {
+    public async start() {
+        // Load Settings
+        const historyEnabledStr = await this.repo.getSetting('ai_history_enabled');
+        const llmEnabledStr = await this.repo.getSetting('ai_llm_enabled');
+
+        // Defaults: History=TRUE, LLM=FALSE (as requested)
+        const isHistoryEnabled = historyEnabledStr !== 'false';
+        const isLlmEnabled = llmEnabledStr === 'true'; // Default false
+
+        if (!isHistoryEnabled && !isLlmEnabled) {
+            console.log("AutoClassifier: All strategies disabled.");
+            this.notify('Disabled', false);
+            return;
+        }
+
         if (this.isRunning) return;
-        console.log("AutoClassifier: Started");
+
+        console.log(`AutoClassifier: Started (History: ${isHistoryEnabled}, LLM: ${isLlmEnabled})`);
         this.isRunning = true;
-        this.processNext();
+        this.processNext(isHistoryEnabled, isLlmEnabled);
     }
 
     public stop() {
@@ -40,31 +57,51 @@ export class AutoClassifier {
         this.notify('Paused', false);
     }
 
+    public async setStrategyEnabled(strategy: 'history' | 'llm', enabled: boolean) {
+        await this.repo.setSetting(`ai_${strategy}_enabled`, String(enabled));
+
+        // Restart to pick up new config
+        if (this.isRunning) {
+            this.restart();
+        } else if (enabled) {
+            this.start();
+        }
+    }
+
+    public restart() {
+        console.log("AutoClassifier: Restarting...");
+        this.stop();
+        this.consecutiveFailures = 0;
+        this.failedIds.clear();
+        setTimeout(() => this.start(), 100); // Small delay to ensure clean restart
+    }
+
     private consecutiveFailures = 0;
-    private readonly MAX_FAILURES = 5;
+    private readonly MAX_FAILURES = 20;
     private failedIds = new Set<string>(); // Skip items we can't handle this session
 
-    private async processNext() {
+    private async processNext(historyEnabled: boolean = true, llmEnabled: boolean = false) {
         if (!this.isRunning) return;
 
-        // 1. Check Model
-        const isReady = await ModelManager.isModelReady();
-        if (!isReady) {
-            this.consecutiveFailures++;
-            if (this.consecutiveFailures >= 3) {
-                this.notify('Model not ready. Paused.', false);
-                this.isRunning = false;
+        // 1. Check Model (Only if LLM is enabled?) 
+        // Actually, if only history is enabled, we don't need the model.
+        if (llmEnabled) {
+            const isReady = await ModelManager.isModelReady();
+            if (!isReady) {
+                this.consecutiveFailures++;
+                if (this.consecutiveFailures >= 3) {
+                    this.notify('Model not ready. Paused.', false);
+                    this.isRunning = false;
+                    return;
+                }
+                this.notify('Waiting for AI Model...', false);
+                setTimeout(() => this.processNext(historyEnabled, llmEnabled), 10000);
                 return;
             }
-            this.notify('Waiting for AI Model...', false);
-            setTimeout(() => this.processNext(), 10000);
-            return;
         }
 
-        // 2. Fetch candidates (Batch size 10 to skip failed ones)
-        const candidates = this.repo.getUncategorizedExpenses(10);
-
-        // Find first candidate not in failed list
+        // 2. Fetch candidates
+        const candidates = await this.repo.getUncategorizedExpenses(10);
         const expense = candidates.find(c => !this.failedIds.has(c.id));
 
         if (!expense) {
@@ -74,72 +111,131 @@ export class AutoClassifier {
             return;
         }
 
-        this.notify(`Classifying: ${expense.description.slice(0, 20)}...`, true);
+        console.log(`AutoClassifier: Processing ${expense.id} (${expense.recipient})...`);
+        this.notify(`Classifying: ${expense.recipient || 'Unknown'}`, true);
 
         try {
-            // 3. RAG: Check Header / Context
-            let contextHint = undefined;
-            let isTrusted = false;
-
-            // Strategy: Use parsed recipient first, fallback to Regex extraction
-            let recipientName = expense.recipient;
-            if (!recipientName || recipientName === 'Unknown') {
-                const match = expense.description.match(/Paid to (.+?)( on \d+|$)/i);
-                if (match) {
-                    recipientName = match[1].trim();
+            // =========================================================
+            // STRATEGY 1: HISTORY & RULES (Verified + Internal)
+            // =========================================================
+            if (historyEnabled) {
+                // A. Check for Internal Transfers using shared logic
+                let isInternal = false;
+                if (expense.rawText) {
+                    const parsed = parseMpesaMessage(expense.rawText);
+                    if (parsed && (parsed.type === 'internal' || parsed.direction === 'internal')) {
+                        isInternal = true;
+                    }
                 }
-            }
 
-            if (recipientName) {
-                console.log(`AutoClassifier: Checking history for '${recipientName}'...`);
-                // Note: Ensure getLastTransactionForRecipient exists in repo (it should if my other edit worked, otherwise I need to check repo too)
-                const history = await this.repo.getLastTransactionForRecipient(recipientName);
-                if (history && history.categoryName) {
-                    console.log(`AutoClassifier: Found context for '${recipientName}' -> ${history.categoryName}`);
-                    contextHint = history.categoryName;
-                    isTrusted = true;
-                } else {
-                    console.log(`AutoClassifier: No history found for '${recipientName}'.`);
-                }
-            }
-
-            // 4. Classify
-            const startStr = `Spent ${expense.amount} on ${expense.description}`;
-            // @ts-ignore - Ignoring TS error if LlmClient signature isn't updated yet (I will update it next)
-            const result = await LlmClient.getInstance().categorize(startStr, [], contextHint);
-
-            if (result.category) {
-                const catObj = this.repo.getCategoryByName(result.category);
-                if (catObj && catObj.name !== 'Other') {
-                    console.log(`AutoClassifier: Upgraded ${expense.id} -> ${catObj.name} (Verified: ${isTrusted})`);
+                if (isInternal) {
+                    console.log(`AutoClassifier: flagging '${expense.recipient}' as Internal Transfer`);
                     await this.repo.updateExpense(expense.id, {
-                        categoryId: catObj.id,
-                        isVerified: isTrusted // Mark as verified if we had historical context
+                        isVerified: true,
+                        excludeFromAnalytics: true
                     });
+
+                    IngestionEvents.emit(INGESTION_EVENT.TRANSACTION_INGESTED, {
+                        transactionId: expense.id,
+                        recipient: expense.recipient,
+                        categoryName: 'Internal Transfer',
+                        amount: expense.amount,
+                        type: 'transfer',
+                        source: 'auto'
+                    } as any);
+
                     this.consecutiveFailures = 0;
-                } else {
-                    // Category from LLM (e.g. 'Salary') doesn't match any DB category.
-                    console.warn(`AutoClassifier: Unknown category '${result.category}' for ${expense.id}. Skipping.`);
-                    this.failedIds.add(expense.id);
+                    setTimeout(() => this.processNext(historyEnabled, llmEnabled), 100);
+                    return;
                 }
-            } else {
-                // Empty result or confidence low
-                this.failedIds.add(expense.id);
+
+                // B. Check Verified History
+                const history = await this.repo.getLastTransactionForRecipient(expense.recipient || '');
+                if (history && history.categoryId) {
+                    console.log(`AutoClassifier: History Match for '${expense.recipient}' -> ${history.categoryName}`);
+                    await this.repo.updateExpense(expense.id, {
+                        categoryId: history.categoryId,
+                        isVerified: false, // AI proposals are unverified until human confirms
+                        excludeFromAnalytics: history.excludeFromAnalytics
+                    });
+
+                    IngestionEvents.emit(INGESTION_EVENT.TRANSACTION_INGESTED, {
+                        transactionId: expense.id,
+                        recipient: expense.recipient,
+                        categoryName: history.categoryName,
+                        amount: expense.amount,
+                        type: 'expense',
+                        source: 'auto'
+                    } as any);
+
+                    this.consecutiveFailures = 0;
+                    setTimeout(() => this.processNext(historyEnabled, llmEnabled), 500);
+                    return;
+                }
             }
-        } catch (e) {
-            console.error("AutoClassifier Error", e);
-            this.failedIds.add(expense.id); // Skip this one for now
+
+            // =========================================================
+            // STRATEGY 2: LLM (Generative AI)
+            // =========================================================
+            if (llmEnabled) {
+                const categories = await this.repo.getAllCategories();
+                const categoryNames = categories.map(c => c.name);
+                const promptInstructions = `
+                     Categorize this transaction into one of: ${categoryNames.join(', ')}.
+                     Recipient: ${expense.recipient}
+                     Description: ${expense.description}
+                     Amount: ${expense.amount}
+                     Date: ${new Date(expense.date).toLocaleDateString()}
+                     
+                     Return ONLY the category name. If unsure, return "Uncategorized".
+                 `;
+
+                const result = await LlmClient.getInstance().categorize(promptInstructions, categoryNames);
+
+                // result is { amount?, category?, description? }
+                const predictedCategory = result?.category;
+
+                if (predictedCategory && predictedCategory !== 'Uncategorized' && predictedCategory !== 'Other') {
+                    const cat = categories.find(c => c.name.toLowerCase() === predictedCategory.toLowerCase());
+                    if (cat) {
+                        console.log(`AutoClassifier: LLM Match for '${expense.recipient}' -> ${cat.name}`);
+                        await this.repo.updateExpense(expense.id, {
+                            categoryId: cat.id,
+                            isVerified: false
+                        });
+
+                        IngestionEvents.emit(INGESTION_EVENT.TRANSACTION_INGESTED, {
+                            transactionId: expense.id,
+                            recipient: expense.recipient,
+                            categoryName: cat.name,
+                            amount: expense.amount,
+                            type: 'expense',
+                            source: 'auto'
+                        } as any);
+
+                        this.consecutiveFailures = 0;
+                        setTimeout(() => this.processNext(historyEnabled, llmEnabled), 500);
+                        return;
+                    }
+                }
+                console.log(`AutoClassifier: LLM returned '${predictedCategory}', could not match category.`);
+            }
+
+            // If we got here, we failed to categorize (either no history match, or LLM failed/disabled)
+            console.log(`AutoClassifier: Could not categorize '${expense.recipient}'. Skipping.`);
+            this.failedIds.add(expense.id);
+            this.consecutiveFailures = 0;
+            setTimeout(() => this.processNext(historyEnabled, llmEnabled), 100);
+
+        } catch (error) {
+            console.error("AutoClassifier Error", error);
             this.consecutiveFailures++;
+            if (this.consecutiveFailures >= this.MAX_FAILURES) {
+                this.notify('Error Limit Reached', false);
+                this.isRunning = false;
+            } else {
+                setTimeout(() => this.processNext(historyEnabled, llmEnabled), 2000);
+            }
         }
-
-        if (this.consecutiveFailures >= this.MAX_FAILURES) {
-            console.warn("AutoClassifier: Too many consecutive failures. Stopping.");
-            this.notify('Error: AI Model Failed', false);
-            this.isRunning = false;
-            return;
-        }
-
-        // 4. Loop (Slower Pace)
-        setTimeout(() => this.processNext(), 4000);
     }
 }

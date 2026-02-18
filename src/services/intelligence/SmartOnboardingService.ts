@@ -59,7 +59,7 @@ export class SmartOnboardingService {
      * Step 2: Apply the label to history AND future (via RAG context).
      */
     public async labelPayee(payeeName: string, categoryId: string): Promise<number> {
-        return await this.repo.bulkUpdateCategory(payeeName, categoryId);
+        return await this.repo.bulkUpdateCategory(payeeName, categoryId, true);
     }
 
     /**

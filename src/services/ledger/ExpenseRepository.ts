@@ -180,7 +180,7 @@ export class ExpenseRepository {
 
     // --- Updates ---
 
-    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified'>>): Promise<void> {
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics'>>): Promise<void> {
         const sets: string[] = [];
         const args: any[] = [];
 
@@ -200,6 +200,10 @@ export class ExpenseRepository {
             sets.push('isVerified = ?');
             args.push(updates.isVerified ? 1 : 0);
         }
+        if (updates.excludeFromAnalytics !== undefined) {
+            sets.push('excludeFromAnalytics = ?');
+            args.push(updates.excludeFromAnalytics ? 1 : 0);
+        }
 
         if (sets.length === 0) return;
 
@@ -208,17 +212,19 @@ export class ExpenseRepository {
     }
 
     /**
-     * RAG Helper: Find the last categorized transaction for a recipient
+     * RAG Helper: Find the last categorized transaction for a recipient.
+     * Prioritizes user-verified (isVerified=1) corrections over auto-categorized items.
      */
     public async getLastTransactionForRecipient(recipient: string): Promise<Expense | null> {
         if (!recipient) return null;
 
-        const result = this.db.execute(
+        const result = await this.db.execute(
             `SELECT e.*, c.name as categoryName 
              FROM expenses e
              JOIN categories c ON e.categoryId = c.id
              WHERE (e.recipient = ? COLLATE NOCASE OR e.sender = ? COLLATE NOCASE OR e.description LIKE ?)
              AND c.name != 'Other'
+             AND e.isVerified = 1
              ORDER BY e.date DESC
              LIMIT 1`,
             [recipient, recipient, `%${recipient}%`]
@@ -281,12 +287,12 @@ export class ExpenseRepository {
     /**
      * Smart Onboarding: Bulk categorize by recipient
      */
-    public async bulkUpdateCategory(recipient: string, categoryId: string): Promise<number> {
+    public async bulkUpdateCategory(recipient: string, categoryId: string, isVerified: boolean): Promise<number> {
         const result = await this.db.execute(
             `UPDATE expenses 
-             SET categoryId = ?, isVerified = 1 
+             SET categoryId = ?, isVerified = ? 
              WHERE recipient = ? COLLATE NOCASE`,
-            [categoryId, recipient]
+            [categoryId, isVerified ? 1 : 0, recipient]
         );
         return result.rowsAffected || 0;
     }
@@ -335,18 +341,32 @@ export class ExpenseRepository {
     }
 
 
-    public getUncategorizedExpenses(limit: number = 20): Expense[] {
-        // Get 'Other' category ID first or assume we filter by it.
-        // Better: Join with categories and check name='Other'
-        const result = this.db.execute(
+    public async getUncategorizedExpenses(limit: number = 20): Promise<Expense[]> {
+        // Debug: Check total unverified count
+        try {
+            const countRes = await this.db.execute(`SELECT COUNT(*) as c FROM expenses WHERE isVerified = 0`);
+            const total = Database.getRows(countRes)[0].c;
+            console.log(`[ExpenseRepository] Total unverified expenses in DB: ${total}`);
+        } catch (e) {
+            console.warn('[ExpenseRepository] Failed to count unverified:', e);
+        }
+
+        // Broadened: Fetch ANY unverified expense (NULL category, Orphans, 'Other', manual unchecked)
+        // Added c.id IS NULL to catch orphans (categoryId exists but no matching category)
+        const result = await this.db.execute(
             `SELECT e.*, c.name as categoryName 
              FROM expenses e
-             JOIN categories c ON e.categoryId = c.id
-             WHERE c.name = 'Other' 
+             LEFT JOIN categories c ON e.categoryId = c.id
+             WHERE e.isVerified = 0
+             AND (e.categoryId IS NULL OR c.id IS NULL OR c.name = 'Other' OR c.name = 'Uncategorized')
+             AND e.recipient != 'MPESA'
+             ORDER BY RANDOM()
              LIMIT ?`,
             [limit]
         );
-        return Database.getRows(result) as Expense[];
+        const rows = Database.getRows(result) as Expense[];
+        console.log(`[ExpenseRepository] getUncategorizedExpenses returned ${rows.length} items`);
+        return rows;
     }
 
     public async scanAndFlagInternalTransfers() {
@@ -375,8 +395,8 @@ export class ExpenseRepository {
                 if (parsed.direction === 'in') {
                     correctType = 'income';
                 } else if (isInternal) {
-                    // Internal TO Mpesa = Income
-                    if (parsed.to?.toUpperCase() === 'M-PESA' || parsed.direction === 'in') {
+                    // Internal TO Mpesa (from Pochi/Mshwari) = Income/Deposit to main wallet
+                    if (parsed.to?.toUpperCase() === 'M-PESA') {
                         correctType = 'income';
                     }
                 }
@@ -710,5 +730,48 @@ export class ExpenseRepository {
             [transactionId]
         );
         return (result.rowsAffected || 0) > 0;
+    }
+
+    /**
+     * Migration: Mark all existing categorized expenses (not 'Other') as verified.
+     * Use this to align existing data with user's assertion that "current labels are verified".
+     */
+    public async verifyExistingCategorizedExpenses(): Promise<number> {
+        // 1. GLOBAL RESET: Set everything to unverified first.
+        await this.db.execute(`UPDATE expenses SET isVerified = 0`);
+
+        // 2. STRICT VERIFY: Only verify items that match ALL criteria:
+        //    - Not NULL/Empty categoryId
+        //    - Not named 'Other' or 'Uncategorized'
+        //    - Category ID actually exists in the categories table
+        const result = await this.db.execute(
+            `UPDATE expenses 
+             SET isVerified = 1 
+             WHERE categoryId IS NOT NULL 
+             AND categoryId != ''
+             AND categoryId NOT IN (SELECT id FROM categories WHERE name IN ('Other', 'Uncategorized'))
+             AND EXISTS (SELECT 1 FROM categories c WHERE c.id = expenses.categoryId)`
+        );
+
+        return result.rowsAffected || 0;
+    }
+
+    /**
+     * Settings Management (SQLite)
+     */
+    public async getSetting(key: string): Promise<string | null> {
+        const result = await this.db.execute(
+            `SELECT value FROM settings WHERE key = ?`,
+            [key]
+        );
+        const rows = Database.getRows(result);
+        return rows.length > 0 ? rows[0].value : null;
+    }
+
+    public async setSetting(key: string, value: string): Promise<void> {
+        await this.db.execute(
+            `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
+            [key, value]
+        );
     }
 }

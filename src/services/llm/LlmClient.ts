@@ -21,9 +21,12 @@ export class LlmClient {
         if (this.isInitializing) return;
 
         this.isInitializing = true;
+        console.log("LlmClient: init() called");
         try {
             const modelPath = ModelManager.getModelPath();
+            console.log("LlmClient: Checking model readiness...");
             const isReady = await ModelManager.isModelReady();
+            console.log(`LlmClient: Model ready status: ${isReady}`);
 
             if (!isReady) {
                 throw new Error("Local Model not downloaded");
@@ -33,15 +36,16 @@ export class LlmClient {
             const stats = await require('react-native-fs').stat(modelPath);
             console.log(`LlmClient: Model file size: ${stats.size} bytes`);
 
+            console.log("LlmClient: Calling initLlama backend...");
             this.context = await initLlama({
                 model: modelPath,
-                use_mlock: true,
+                use_mlock: false, // Disabled to prevent native OOM/crashes
                 n_ctx: 2048,
                 n_gpu_layers: 0,
             });
-            console.log("LlmClient: Context initialized");
+            console.log("LlmClient: Context initialized successfully");
         } catch (e: any) {
-            console.error("LlmClient: Init failed", e.message);
+            console.error("LlmClient: Init failed", e);
             throw e;
         } finally {
             this.isInitializing = false;
@@ -135,27 +139,43 @@ export class LlmClient {
     }
 
     private async categorizeLocal(text: string, availableCategories: string[] = [], contextHint?: string): Promise<any> {
-        if (!this.context) {
-            await this.init();
-        }
-        if (!this.context) throw new Error("LLM Context failed to initialize");
+        let attempts = 0;
+        const maxAttempts = 2;
 
-        const prompt = this.buildPrompt(text, availableCategories, contextHint, true);
+        while (attempts < maxAttempts) {
+            try {
+                if (!this.context) await this.init();
+                // Check again in case init failed
+                if (!this.context) throw new Error("Context failed to load");
 
-        try {
-            const response = await this.context.completion({
-                prompt: prompt,
-                n_predict: 60,
-                temperature: 0.1,
-                stop: ["<|im_end|>", "\n\n"]
-            });
-            console.log("LlmClient: Local Result:", response.text);
-            const jsonStr = this.extractJson(response.text);
-            return JSON.parse(jsonStr);
-        } catch (e) {
-            console.error("LlmClient: Local Inference failed", e);
-            return { category: null };
+                const prompt = this.buildPrompt(text, availableCategories, contextHint, true);
+
+                const response = await this.context.completion({
+                    prompt: prompt,
+                    n_predict: 60,
+                    temperature: 0.1,
+                    stop: ["<|im_end|>", "\n\n"]
+                });
+
+                console.log("LlmClient: Local Result:", response.text);
+                const jsonStr = this.extractJson(response.text);
+                return JSON.parse(jsonStr);
+
+            } catch (e) {
+                console.error(`LlmClient: Local Inference attempt ${attempts + 1} failed`, e);
+                attempts++;
+
+                // If it was a native crash, the context might be dead. Force release.
+                await this.release();
+
+                if (attempts >= maxAttempts) {
+                    return { category: null };
+                }
+                // Wait briefly before retry
+                await new Promise(resolve => setTimeout(() => resolve(null), 500));
+            }
         }
+        return { category: null };
     }
 
     private buildPrompt(text: string, categories: string[], contextHint?: string, useChatML = true): string {

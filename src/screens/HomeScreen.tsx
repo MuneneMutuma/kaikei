@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, SectionList, TouchableOpacity,
-  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform, StatusBar
+  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform, StatusBar, FlatList, ActivityIndicator
 } from 'react-native';
 import { View as MotiView } from 'moti';
+import { CheckCircle, Sparkles } from 'lucide-react-native';
 
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { Expense, Category } from "../services/ledger/Schema";
@@ -24,6 +25,13 @@ const getCategoryIcon = (name: string) => {
     case 'entertainment': return '🎬';
     case 'bills': return '🧾';
     case 'health': return '💊';
+    case 'stock': return '📦';
+    case 'airtime': return '📱';
+    case 'rent': return '🏠';
+    case 'utilities': return '💡';
+    case 'labor': return '👷';
+    case 'loans': return '🏦';
+    case 'other': return '📝';
     default: return '💸';
   }
 };
@@ -168,6 +176,7 @@ export default function HomeScreen({ route, navigation }: any) {
 
   }, [repo, onboardingService, lastDataHash, sections.length]);
 
+
   const handleConfirmSuggestion = async (candidate: PayeeCandidate, catId: string) => {
     // Use passed candidate/catId or fallback to state?
     // The Deck calls this with specific args
@@ -209,9 +218,11 @@ export default function HomeScreen({ route, navigation }: any) {
     try {
       await repo.updateExpense(selectedExpense.id, {
         description: editDescription,
-        categoryId: editCategoryId
+        categoryId: editCategoryId,
+        isVerified: true
       });
       setDetailModalVisible(false);
+      setLastDataHash(''); // Force refresh
       fetchData();
     } catch (e) {
       Alert.alert("Error", "Update failed.");
@@ -223,6 +234,7 @@ export default function HomeScreen({ route, navigation }: any) {
     try {
       await repo.deleteExpense(selectedExpense.id);
       setDetailModalVisible(false);
+      setLastDataHash(''); // Force refresh
       fetchData();
     } catch (e) {
       Alert.alert("Error", "Delete failed.");
@@ -238,19 +250,26 @@ export default function HomeScreen({ route, navigation }: any) {
         StatusBar.setBackgroundColor('transparent');
         StatusBar.setTranslucent(true);
       }
+
+      // One-time Migration Check (Archived)
+      // runMigration();
+
       fetchData();
-    }, [])
+    }, [fetchData])
   );
+
 
   useEffect(() => {
     const classifier = AutoClassifier.getInstance();
+
+
+    // Listen for status updates (global service started in App.tsx)
     const unsub = classifier.addListener((status, processing) => {
       setClassifierStatus(status);
       setIsProcessing(processing);
     });
-    classifier.start();
+
     return () => {
-      classifier.stop();
       unsub();
     };
   }, []);
@@ -308,7 +327,14 @@ export default function HomeScreen({ route, navigation }: any) {
                 {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
               </Text>
             </View>
-            <Text style={styles.date}>{item.categoryName || 'Uncategorized'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+              {item.isVerified ? (
+                <CheckCircle size={14} color={colors.success} style={{ marginRight: 4 }} />
+              ) : (item.categoryName && item.categoryName !== 'Other' && item.categoryName !== 'Uncategorized') ? (
+                <Sparkles size={14} color={colors.primary} style={{ marginRight: 4 }} />
+              ) : null}
+              <Text style={styles.date}>{item.categoryName || 'Uncategorized'}</Text>
+            </View>
           </View>
         </TouchableOpacity>
       </MotiView>
@@ -354,6 +380,14 @@ export default function HomeScreen({ route, navigation }: any) {
   return (
     <View style={styles.container}>
       <HomeHeader userName={userName} totalSpent={totalSpent} totalIncome={totalIncome} />
+
+      {/* AI Processing Indicator */}
+      {isProcessing && (
+        <View style={styles.processingBadge}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.processingText}>AI Categorizing...</Text>
+        </View>
+      )}
 
       <SectionList
         sections={sections}
@@ -409,6 +443,39 @@ export default function HomeScreen({ route, navigation }: any) {
             <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#FFEBEE', marginTop: 10 }]} onPress={handleDelete}>
               <Text style={[styles.saveBtnText, { color: colors.danger }]}>Delete</Text>
             </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Category Selection Modal */}
+      <Modal
+        visible={categoryModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setCategoryModalVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCategoryModalVisible(false)}>
+          <View style={[styles.drawerContainer, { height: '70%', paddingBottom: 20 }]}>
+            <View style={styles.drawerHandle} />
+            <Text style={styles.drawerTitle}>Select Category</Text>
+
+            <FlatList
+              data={categories}
+              keyExtractor={item => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.catItem, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}
+                  onPress={() => {
+                    setEditCategoryId(item.id);
+                    setCategoryModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.catText, item.id === editCategoryId && { color: colors.primary, fontWeight: 'bold' }]}>
+                    {getCategoryIcon(item.name)} {item.name}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
           </View>
         </TouchableOpacity>
       </Modal>
@@ -475,6 +542,26 @@ const styles = StyleSheet.create({
   drawerHandle: { width: 40, height: 4, backgroundColor: '#E5E7EB', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
   drawerTitle: { ...typography.header, textAlign: 'center', marginBottom: 20 },
 
+  processingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF', // light indigo
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  processingText: {
+    ...typography.caption,
+    color: colors.primary,
+    marginLeft: 8,
+    fontWeight: '600',
+  },
+
   inputLabel: { ...typography.caption, marginTop: 12, marginBottom: 4 },
   input: { backgroundColor: colors.background, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
 
@@ -482,7 +569,7 @@ const styles = StyleSheet.create({
   saveBtnText: { color: 'white', fontWeight: 'bold' },
 
   catItem: { padding: 16, borderBottomWidth: 1, borderColor: colors.border },
-  catText: { ...typography.body, fontSize: 16 },
+  catText: { ...typography.body, fontSize: 16, color: colors.text },
 });
 
 

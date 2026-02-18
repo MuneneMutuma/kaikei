@@ -4,11 +4,13 @@ import { useNavigation } from '@react-navigation/native';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell, Save, Download, Smartphone, Zap, Battery, CheckCircle, AlertTriangle } from 'lucide-react-native';
+import { Settings, LogOut, ChevronRight, User, Shield, CreditCard, Bell, Save, Download, Smartphone, Zap, Battery, CheckCircle, AlertTriangle, Sparkles } from 'lucide-react-native';
 import { BackupService } from '../services/backup/BackupService';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 import { SettingsRepository } from '../services/settings/SettingsRepository';
 import { IngestionService } from '../services/ingestion/IngestionService';
+import { AutoClassifier } from '../services/intelligence/AutoClassifier';
+import { IngestionEvents, INGESTION_EVENT } from '../services/ingestion/IngestionEvents';
 
 import { BackupModal } from '../components/BackupModal';
 import { RestorePickerModal } from '../components/RestorePickerModal';
@@ -38,40 +40,21 @@ export default function ProfileScreen() {
     const [smsPermissionOk, setSmsPermissionOk] = useState(false);
     const [notificationAccessOk, setNotificationAccessOk] = useState(false);
     const [batteryOptimized, setBatteryOptimized] = useState(true); // true = BAD (optimized = killed)
+    const [historyEnabled, setHistoryEnabled] = useState(true);
+    const [llmEnabled, setLlmEnabled] = useState(false);
+
     const settingsRepo = React.useMemo(() => new SettingsRepository(), []);
     const expenseRepo = React.useMemo(() => new ExpenseRepository(), []);
 
-    React.useEffect(() => {
-        const loadProfile = async () => {
-            try {
-                const data = await settingsRepo.getUserSettings();
-                setUserProfile({
-                    name: data.userName || 'User',
-                    persona: data.userPersona || 'Standard',
-                    email: 'user@kaikei.app'
-                });
-            } catch (e) {
-                console.error("Profile load error", e);
-            }
-        };
-        loadProfile();
-    }, []);
-
-    const handlePersonaSwitch = async (newPersona: string) => {
+    const handleStrategyToggle = async (strategy: 'history' | 'llm', enabled: boolean) => {
+        if (strategy === 'history') setHistoryEnabled(enabled);
+        if (strategy === 'llm') setLlmEnabled(enabled);
+        
         try {
-            await settingsRepo.setValue('user_persona', newPersona);
-            const added = await expenseRepo.ensureCategoriesForPersona(newPersona);
-
-            setUserProfile(prev => ({ ...prev, persona: newPersona }));
-            setPersonaModalVisible(false);
-
-            if (added > 0) {
-                Alert.alert("Success", `Switched to ${newPersona}. Added ${added} new categories!`);
-            } else {
-                Alert.alert("Success", `Switched to ${newPersona}. Categories updated.`);
-            }
+            await AutoClassifier.getInstance().setStrategyEnabled(strategy, enabled);
         } catch (e) {
-            Alert.alert("Error", "Failed to switch persona.");
+            console.error("Failed to set strategy:", e);
+            Alert.alert("Error", "Could not update AI settings.");
         }
     };
 
@@ -82,6 +65,13 @@ export default function ProfileScreen() {
             const alwaysOn = await settingsRepo.isAlwaysOnEnabled();
             setAutoImportEnabled(autoEnabled);
             setAlwaysOnEnabled(alwaysOn);
+
+            // Load AI Strategies
+            const historyStr = await expenseRepo.getSetting('ai_history_enabled');
+            const llmStr = await expenseRepo.getSetting('ai_llm_enabled');
+
+            setHistoryEnabled(historyStr !== 'false'); // Default TRUE
+            setLlmEnabled(llmStr === 'true');          // Default FALSE
 
             // Check SMS permission
             const smsGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_SMS);
@@ -216,6 +206,22 @@ export default function ProfileScreen() {
                         if (result.success) {
                             setRestoreCounts(result.counts);
                             setBackupError(undefined);
+
+                            // 1. Check for new SMS that arrived after this backup was created
+                            console.log("Restore complete. Starting catch-up scan...");
+                            IngestionService.runCatchUpScan().then(catchUpResult => {
+                                console.log("Catch-up complete", catchUpResult);
+
+                                // 2. Restart AI to process newly imported or restored items
+                                AutoClassifier.getInstance().restart();
+
+                                // 3. Refresh UI
+                                IngestionEvents.emit(INGESTION_EVENT.CATCH_UP_COMPLETE, {
+                                    imported: (result.counts?.expenses || 0) + catchUpResult.imported,
+                                    skipped: catchUpResult.skipped,
+                                    errors: catchUpResult.errors
+                                });
+                            });
                         } else {
                             setRestoreCounts(undefined);
                             setBackupError(result.error || 'Restore failed.');
@@ -384,6 +390,42 @@ export default function ProfileScreen() {
                             </View>
                         </>
                     )}
+                    {/* Auto-Classifier Strategies */}
+                    <Text style={[styles.sectionTitle, { marginTop: 24, marginBottom: 8 }]}>Auto-Classification</Text>
+
+                    {/* Strategy 1: History / Rule Based */}
+                    <View style={[styles.menuItem, { paddingLeft: 16 }]}>
+                        <View style={styles.menuIconContainer}>
+                            <Zap size={20} color={historyEnabled ? colors.primary : colors.textSecondary} />
+                        </View>
+                        <View style={styles.menuTextContainer}>
+                            <Text style={styles.menuLabel}>Rule & History Based</Text>
+                            <Text style={styles.menuSubLabel}>Safe. Uses your past verifictions.</Text>
+                        </View>
+                        <Switch
+                            value={historyEnabled}
+                            onValueChange={(val) => handleStrategyToggle('history', val)}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={'white'}
+                        />
+                    </View>
+
+                    {/* Strategy 2: LLM Based */}
+                    <View style={[styles.menuItem, { paddingLeft: 16 }]}>
+                        <View style={styles.menuIconContainer}>
+                            <Sparkles size={20} color={llmEnabled ? colors.primary : colors.textSecondary} />
+                        </View>
+                        <View style={styles.menuTextContainer}>
+                            <Text style={styles.menuLabel}>LLM / AI Based</Text>
+                            <Text style={styles.menuSubLabel}>Experimental. Can hallucinate.</Text>
+                        </View>
+                        <Switch
+                            value={llmEnabled}
+                            onValueChange={(val) => handleStrategyToggle('llm', val)}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={'white'}
+                        />
+                    </View>
                 </View>
 
                 {/* Section: Settings */}

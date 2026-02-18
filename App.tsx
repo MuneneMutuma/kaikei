@@ -26,6 +26,7 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import { SettingsRepository } from './src/services/settings/SettingsRepository';
 // Import IngestionService at module scope so Headless JS task is registered immediately
 import { IngestionService } from './src/services/ingestion/IngestionService';
+import { AutoClassifier } from './src/services/intelligence/AutoClassifier';
 
 export type RootStackParamList = {
   Setup: undefined;
@@ -174,6 +175,8 @@ const App = () => {
         // Start auto-ingestion if enabled
         try {
           await IngestionService.start();
+          // Start AI Classifier globally (runs in background)
+          AutoClassifier.getInstance().start();
         } catch (e) {
           console.warn('IngestionService startup (non-critical):', e);
         }
