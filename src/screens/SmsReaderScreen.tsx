@@ -83,8 +83,11 @@ export default function SMSReaderScreen() {
     setLoading(true);
 
     // 1. Load Ledger State
-    const allCategories = repo.current.getAllCategories();
-    setCategories(allCategories);
+    const loadData = async () => {
+      const allCategories = await repo.current.getAllCategories();
+      setCategories(allCategories);
+    };
+    loadData();
 
     // We could optimize this by fetching only relevant IDs, but for now filtering locally
     // Actually repo methods are async in our thought process but implementation was mixed. 
@@ -185,11 +188,33 @@ export default function SMSReaderScreen() {
     Alert.alert("Success", `Imported ${result.imported} transactions.`);
   };
 
-  const openDetails = (tx: MpesaTransaction) => {
+  const openDetails = async (tx: MpesaTransaction) => {
     setSelectedTx(tx);
-    // If synced, maybe load existing description/category?
-    // For now, just show modal.
     setDetailModalVisible(true);
+
+    // Reset edit state
+    setEditDescription(tx.direction === 'in' ? `Received from ${tx.from}` : `Paid to ${tx.to || tx.account || 'Unknown'}`);
+    setEditCategoryId("");
+    setExistingExpenseId(null);
+
+    // If synced, load the existing expense data to allow editing
+    if (syncedTxIds.has(tx.tx_id)) {
+      try {
+        const result = await Database.getInstance().execute(
+          'SELECT id, description, categoryId FROM expenses WHERE transactionId = ? LIMIT 1',
+          [tx.tx_id]
+        );
+        const rows = Database.getRows(result);
+        if (rows.length > 0) {
+          const exp = rows[0];
+          setExistingExpenseId(exp.id);
+          setEditDescription(exp.description);
+          setEditCategoryId(exp.categoryId);
+        }
+      } catch (e) {
+        console.error("Failed to load existing expense for edit", e);
+      }
+    }
   };
 
   const handleToggleBusiness = async (item: MpesaTransaction) => {
@@ -414,7 +439,7 @@ export default function SMSReaderScreen() {
                 {syncedTxIds.has(selectedTx.tx_id) ? (
                   <>
                     <View style={styles.divider} />
-                    <Text style={styles.sectionHeader}>Legger Entry</Text>
+                    <Text style={styles.sectionHeader}>Ledger Entry</Text>
 
                     <Text style={styles.inputLabel}>Description</Text>
                     <TextInput
@@ -428,21 +453,116 @@ export default function SMSReaderScreen() {
                       style={styles.input}
                       onPress={() => setCategoryModalVisible(true)}
                     >
-                      <Text>{categories.find(c => c.id === editCategoryId)?.name || 'Select Category'}</Text>
+                      <Text style={{ color: editCategoryId ? colors.text : '#999' }}>
+                        {categories.find(c => c.id === editCategoryId)?.name || 'Select Category'}
+                      </Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity style={styles.saveBtn} onPress={() => {
-                      Alert.alert("Coming Soon", "Edit functionality is mapped but awaiting API.");
-                      setDetailModalVisible(false);
-                    }}>
-                      <Text style={styles.saveBtnText}>Update Entry</Text>
+                    <TouchableOpacity
+                      style={[styles.saveBtn, loading && { opacity: 0.7 }]}
+                      disabled={loading}
+                      onPress={async () => {
+                        if (!existingExpenseId) return;
+                        setLoading(true);
+                        try {
+                          await repo.current.updateExpense(existingExpenseId, {
+                            description: editDescription,
+                            categoryId: editCategoryId,
+                            isVerified: true // Mark as user-verified for future learning
+                          });
+                          Alert.alert("Success", "Entry updated and verified.");
+                          setDetailModalVisible(false);
+                          loadMessages(); // Refresh UI
+                        } catch (e) {
+                          Alert.alert("Error", "Failed to update entry.");
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                    >
+                      {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Changes & Verify</Text>}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.saveBtn, { backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
+                      onPress={async () => {
+                        Alert.alert("Confirm", "Move this to Personal? It will be removed from your business ledger.", [
+                          { text: "Cancel", style: "cancel" },
+                          {
+                            text: "Mark Personal", style: 'destructive', onPress: async () => {
+                              try {
+                                await repo.current.deleteByTransactionId(selectedTx.tx_id);
+                                await repo.current.ignoreTransaction(selectedTx.tx_id);
+                                const nextSynced = new Set(syncedTxIds);
+                                nextSynced.delete(selectedTx.tx_id);
+                                setSyncedTxIds(nextSynced);
+
+                                const nextIgnored = new Set(ignoredTxIds);
+                                nextIgnored.add(selectedTx.tx_id);
+                                setIgnoredTxIds(nextIgnored);
+
+                                setDetailModalVisible(false);
+                                Alert.alert("Moved", "Transaction marked as Personal/Ignored.");
+                              } catch (e) {
+                                Alert.alert("Error", "Failed to move transaction.");
+                              }
+                            }
+                          }
+                        ]);
+                      }}
+                    >
+                      <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Mark as Personal (Ignore)</Text>
                     </TouchableOpacity>
                   </>
                 ) : (
                   <View style={styles.drawerActions}>
-                    <Text style={{ textAlign: 'center', color: '#888', fontStyle: 'italic', marginTop: 20 }}>
-                      Toggle the checkbox on the list to add this to your business ledger.
-                    </Text>
+                    <TouchableOpacity
+                      style={[styles.saveBtn, { width: '100%', backgroundColor: colors.primary }]}
+                      onPress={() => {
+                        setDetailModalVisible(false);
+                        handleToggleBusiness(selectedTx);
+                      }}
+                    >
+                      <Text style={styles.saveBtnText}>Import to Business</Text>
+                    </TouchableOpacity>
+
+                    {!ignoredTxIds.has(selectedTx.tx_id) && (
+                      <TouchableOpacity
+                        style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
+                        onPress={async () => {
+                          try {
+                            await repo.current.ignoreTransaction(selectedTx.tx_id);
+                            const nextIgnored = new Set(ignoredTxIds);
+                            nextIgnored.add(selectedTx.tx_id);
+                            setIgnoredTxIds(nextIgnored);
+                            setDetailModalVisible(false);
+                          } catch (e) {
+                            Alert.alert("Error", "Failed to ignore.");
+                          }
+                        }}
+                      >
+                        <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Mark as Personal</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {ignoredTxIds.has(selectedTx.tx_id) && (
+                      <TouchableOpacity
+                        style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
+                        onPress={async () => {
+                          try {
+                            await repo.current.unIgnoreTransaction(selectedTx.tx_id);
+                            const nextIgnored = new Set(ignoredTxIds);
+                            nextIgnored.delete(selectedTx.tx_id);
+                            setIgnoredTxIds(nextIgnored);
+                            setDetailModalVisible(false);
+                          } catch (e) {
+                            Alert.alert("Error", "Failed to restore.");
+                          }
+                        }}
+                      >
+                        <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Restore as Unprocessed</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
               </View>
