@@ -1,28 +1,29 @@
 export const colors = {
     // Brand
-    primary: '#4CAF50', // Safaricom Green
-    primaryDark: '#388E3C',
-    secondary: '#000000', // Pure Black
+    primary: '#13ec5b', // Bright Green
+    primaryDark: '#0ea640',
+    secondary: '#102216', // Dark Green/Black
 
     // Functional
-    success: '#10B981', // Emerald Teal (Growth)
-    danger: '#EF4444', // Soft Red (Expense)
-    error: '#EF4444', // Alias for danger
+    success: '#10B981',
+    danger: '#EF4444',
+    error: '#EF4444',
     warning: '#F59E0B',
-    info: '#2196F3', // Blue
+    info: '#2196F3',
 
     // UI
-    background: '#F5F5F5',
-    surface: '#FFFFFF',
-    text: '#111827',
-    textSecondary: '#6B7280',
-    border: '#E5E7EB',
+    background: '#f6f8f6', // Light Green-White
+    backgroundDark: '#102216', // Dark Forest
+    surface: '#ffffff',
+    surfaceDark: '#1a3322',
 
-    // Transparent (Glass)
-    glassWhite: 'rgba(255, 255, 255, 0.9)',
-    glassBorder: 'rgba(255, 255, 255, 0.5)',
+    // Text
+    text: '#0d1b12', // Very dark green/black
+    textSecondary: '#64748b',
+    textInverse: '#ffffff',
 
-    // Gradients
-    gradientPrimary: ['#4CAF50', '#2E7D32'],
-    gradientAccent: ['#2196F3', '#1565C0'],
+    border: '#E2E8F0',
+
+    // Gradients (Visual helpers, actual gradients handled by LinearGradient component)
+    gradientPrimary: ['#13ec5b', '#0ea640'],
 };

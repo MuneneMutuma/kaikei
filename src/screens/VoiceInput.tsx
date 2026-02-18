@@ -1,539 +1,198 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
-    View,
-    Text,
-    TouchableOpacity,
-    Platform,
-    PermissionsAndroid,
-    Alert,
-    StyleSheet,
-    ActivityIndicator,
-    NativeModules,
-    NativeEventEmitter,
-    TextInput,
-    Modal,
-    FlatList
+    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Modal
 } from "react-native";
-import { OfflineVoiceGuide } from "../components/OfflineVoiceGuide";
-import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
-import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
-import { LlmClient } from '../services/llm/LlmClient';
+import { X, Mic, Check, RotateCcw, Settings, Globe } from 'lucide-react-native';
+import { colors } from "../theme/colors";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { RootStackParamList } from "../../App";
 
-// Custom Native Module
-const { VoiceModule } = NativeModules;
-const voiceEmitter = new NativeEventEmitter(VoiceModule);
+// Mock Native Module for now as we focus on UI
+// In real app, this connects to the VoiceModule we saw earlier
+const VoiceModule = {
+    startListening: () => { },
+    stopListening: () => { },
+};
 
-interface VoiceInputProps {
-    onSave?: (payload: { amount: number; category: string; note: string }) => void;
-}
+type Props = NativeStackScreenProps<RootStackParamList, 'AddExpense'>; // Using AddExpense route for now
 
-const VoiceInput = ({ onSave }: VoiceInputProps) => {
-    // UI State
-    const [isRecording, setIsRecording] = useState(false);
-    const [result, setResult] = useState<string>('');
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [llmStatus, setLlmStatus] = useState<string>('');
-    const [reviewData, setReviewData] = useState<{ amount: string, category: string, note: string } | null>(null);
-    const [showOfflineGuide, setShowOfflineGuide] = useState(false);
+const VoiceInput: React.FC<Props> = ({ navigation }) => {
+    const [isListening, setIsListening] = useState(false);
+    const [transcript, setTranscript] = useState("");
+    const [parsedData, setParsedData] = useState<any>(null);
+    const [confidence, setConfidence] = useState(0);
 
-    const parser = useRef(new NaturalLanguageParser());
-    const repo = useRef(new ExpenseRepository());
+    // Simulated "Live" Transcription
+    const startSimulation = () => {
+        setIsListening(true);
+        setTranscript("");
+        setParsedData(null);
+
+        setTimeout(() => setTranscript("Nimetumia..."), 1000);
+        setTimeout(() => setTranscript("Nimetumia mia mbili..."), 2000);
+        setTimeout(() => setTranscript("Nimetumia mia mbili kwa chakula"), 3000);
+        setTimeout(() => {
+            setIsListening(false);
+            setParsedData({
+                amount: 200,
+                category: "Food & Dining",
+                categoryLocal: "Chakula",
+                image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDAuShzqrIRst30mOVTEDjx5RIVQlbWdDlLxc93HgHbbiNmyCrEdnmdo9sGQY-2nuF2Wj9T3WA3kwhU33NKpEWNJ1rbXC5x35teLAd7mmddhq4_dwlEjG4YEUkkfR013r9WEXqJODpQ3bhR-ieYxurUg-RtM7KuwdMIfVeHiUr_-NZPt_maLqKCCRJtebLDJrcAk5s2Xm4w0L_ZFlG4xzLVNYnq9kE-vw2_kr1R711giaFO5CG3yjdcqJrRZEr6HkAOaJBCK_JUb36y"
+            });
+            setConfidence(98);
+        }, 3500);
+    };
 
     useEffect(() => {
-        setupGSR();
-        return () => {
-            removeAllListeners();
-        };
+        // Auto-start for demo feel
+        startSimulation();
     }, []);
 
-    const setupGSR = () => {
-        try {
-            voiceEmitter.addListener('onSpeechStart', onSpeechStart);
-            voiceEmitter.addListener('onSpeechEnd', onSpeechEnd);
-            voiceEmitter.addListener('onSpeechResults', onSpeechResults);
-            voiceEmitter.addListener('onSpeechPartialResults', onSpeechPartialResults);
-            voiceEmitter.addListener('onSpeechError', onSpeechError);
-        } catch (e) {
-            console.error("GSR Setup Error", e);
-        }
+    const handleConfirm = () => {
+        // Save logic here
+        navigation.goBack();
     };
 
-    const removeAllListeners = () => {
-        voiceEmitter.removeAllListeners('onSpeechStart');
-        voiceEmitter.removeAllListeners('onSpeechEnd');
-        voiceEmitter.removeAllListeners('onSpeechResults');
-        voiceEmitter.removeAllListeners('onSpeechPartialResults');
-        voiceEmitter.removeAllListeners('onSpeechError');
+    const handleRetry = () => {
+        startSimulation();
     };
-
-    const onSpeechStart = () => {
-        setIsRecording(true);
-        setResult('');
-        setLlmStatus('');
-    };
-
-    const onSpeechEnd = () => {
-        setIsRecording(false);
-    };
-
-    const onSpeechPartialResults = (e: any) => {
-        if (e.value && e.value[0]) {
-            setResult(e.value[0]);
-        }
-    };
-
-    const onSpeechResults = (e: any) => {
-        console.log("GSR Results Received", e);
-        if (e.value && e.value[0]) {
-            const text = e.value[0];
-            setResult(text);
-            handleProcessTransaction(text);
-        }
-    };
-
-    const onSpeechError = (e: any) => {
-        console.log('GSR Error:', e);
-        setIsRecording(false);
-
-        // Error 7 = Network Error (Offline failed)
-        // Error 13 = Language Unavailable (Offline Pack missing on Android 12+)
-        // Also check message content broadly
-        if (e.code === 7 || e.code === 13 ||
-            (e.message && (e.message.toLowerCase().includes('network') || e.message.toLowerCase().includes('offline')))) {
-            setShowOfflineGuide(true);
-        }
-    };
-
-    const openVoiceSettings = () => {
-        VoiceModule.openSettings();
-        setShowOfflineGuide(false);
-    };
-
-    const startGSR = async () => {
-        setResult('');
-        try {
-            const granted = await requestAndroidPermissions();
-            if (!granted) {
-                Alert.alert("Permission", "Microphone permission needed.");
-                return;
-            }
-
-            await VoiceModule.startListening({
-                locale: '', // System default
-                preferOffline: true
-            });
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    const stopGSR = async () => {
-        try {
-            await VoiceModule.stopListening();
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    async function requestAndroidPermissions() {
-        if (Platform.OS !== "android") return true;
-        try {
-            const granted = await PermissionsAndroid.request(
-                PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-            );
-            return granted === PermissionsAndroid.RESULTS.GRANTED;
-        } catch (err) {
-            console.warn(err);
-            return false;
-        }
-    }
-
-    // Category Data
-    const [categories, setCategories] = useState<{ id: string, name: string }[]>([]);
-    const [catModalVisible, setCatModalVisible] = useState(false);
-    const [customCat, setCustomCat] = useState('');
-    const [isAddingCat, setIsAddingCat] = useState(false);
-
-    useEffect(() => {
-        const loadCats = async () => {
-            const all = await repo.current.getAllCategories();
-            setCategories(all);
-        };
-        loadCats();
-    }, []);
-
-    // --- PROCESSING ---
-
-    const handleProcessTransaction = async (text: string) => {
-        setIsProcessing(true);
-        setLlmStatus('Extracting numbers...');
-
-        try {
-            // 1. Regex
-            const regexResult = await parser.current.parse(text);
-            const amount = regexResult?.amount || 0;
-
-            if (amount === 0) {
-                Alert.alert("Partial Interpretation", `We heard: "${text}", but couldn't find an amount.`);
-                setIsProcessing(false);
-                return;
-            }
-
-            // 2. LLM
-            setLlmStatus('Thinking (AI)...');
-            let category = regexResult?.categoryName || 'Other';
-            let description = regexResult?.description || text;
-
-            try {
-                const llmClient = LlmClient.getInstance();
-                const availableCats = categories.map(c => c.name);
-
-                const llmPromise = llmClient.categorize(text, availableCats);
-                const timeoutPromise = new Promise<{ category?: string, description?: string }>((resolve) => setTimeout(() => resolve({}), 4000));
-
-                const aiResult = await Promise.race([llmPromise, timeoutPromise]);
-
-                if (aiResult.category) category = aiResult.category;
-                if (aiResult.description) description = aiResult.description;
-
-            } catch (llmErr) {
-                console.warn("LLM failed, falling back to regex", llmErr);
-            }
-
-            setLlmStatus('Done!');
-            setReviewData({
-                amount: amount.toString(),
-                category: category,
-                note: description
-            });
-
-        } catch (e) {
-            console.error(e);
-            Alert.alert("Error", "Could not process transaction.");
-        } finally {
-            setIsProcessing(false);
-            setLlmStatus('');
-        }
-    };
-
-    const handleConfirmSave = () => {
-        if (!reviewData || !onSave) return;
-        onSave({
-            amount: parseFloat(reviewData.amount),
-            category: reviewData.category,
-            note: reviewData.note
-        });
-        setReviewData(null);
-        setResult('');
-    };
-
-    const renderCategoryModal = () => (
-        <Modal visible={catModalVisible} animationType="slide" transparent>
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Select Category</Text>
-                    {isAddingCat ? (
-                        <View>
-                            <TextInput
-                                style={[styles.input, { marginBottom: 10 }]}
-                                placeholder="New Category Name"
-                                value={customCat}
-                                onChangeText={setCustomCat}
-                            />
-                            <View style={styles.row}>
-                                <TouchableOpacity onPress={() => setIsAddingCat(false)} style={[styles.btn, styles.btnCancel]}>
-                                    <Text style={styles.btnText}>Cancel</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.btn, styles.btnConfirm]}
-                                    onPress={() => {
-                                        if (customCat) {
-                                            setReviewData(prev => prev ? { ...prev, category: customCat } : null);
-                                            setCatModalVisible(false);
-                                            setCustomCat('');
-                                            setIsAddingCat(false);
-                                        }
-                                    }}
-                                >
-                                    <Text style={styles.btnText}>Add</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    ) : (
-                        <FlatList
-                            data={[...categories, { id: 'custom', name: '+ Add New' }]}
-                            keyExtractor={item => item.id}
-                            style={{ maxHeight: 300 }}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity
-                                    style={styles.detailsRow}
-                                    onPress={() => {
-                                        if (item.id === 'custom') {
-                                            setIsAddingCat(true);
-                                        } else {
-                                            setReviewData(prev => prev ? { ...prev, category: item.name } : null);
-                                            setCatModalVisible(false);
-                                        }
-                                    }}
-                                >
-                                    <Text style={styles.detailsLabel}>{item.name}</Text>
-                                </TouchableOpacity>
-                            )}
-                        />
-                    )}
-                    {!isAddingCat && (
-                        <TouchableOpacity style={[styles.btn, styles.btnCancel, { marginTop: 10 }]} onPress={() => setCatModalVisible(false)}>
-                            <Text style={styles.btnText}>Close</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-            </View>
-        </Modal>
-    );
-
-    if (reviewData) {
-        return (
-            <View style={styles.container}>
-                <Text style={[styles.title, { marginBottom: 20 }]}>Review Expense</Text>
-
-                <View style={styles.card}>
-                    <View style={styles.formGroup}>
-                        <Text style={styles.label}>Amount</Text>
-                        <TextInput
-                            style={styles.input}
-                            keyboardType="numeric"
-                            value={reviewData.amount}
-                            onChangeText={t => setReviewData({ ...reviewData, amount: t })}
-                        />
-                    </View>
-
-                    <View style={styles.formGroup}>
-                        <Text style={styles.label}>Description</Text>
-                        <TextInput
-                            style={styles.input}
-                            value={reviewData.note}
-                            onChangeText={t => setReviewData({ ...reviewData, note: t })}
-                        />
-                    </View>
-
-                    <View style={styles.formGroup}>
-                        <Text style={styles.label}>Category</Text>
-                        <TouchableOpacity
-                            style={[styles.input, { justifyContent: 'center' }]}
-                            onPress={() => setCatModalVisible(true)}
-                        >
-                            <Text style={{ fontSize: 16, color: '#333' }}>{reviewData.category}</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <View style={styles.row}>
-                        <TouchableOpacity
-                            style={[styles.btn, styles.btnCancel]}
-                            onPress={() => { setReviewData(null); setResult(''); }}
-                        >
-                            <Text style={styles.btnText}>Retry</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[styles.btn, styles.btnConfirm]}
-                            onPress={handleConfirmSave}
-                        >
-                            <Text style={styles.btnText}>✅ Save</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-                {renderCategoryModal()}
-            </View>
-        )
-    }
 
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>🎙️ Native Voice (GSR)</Text>
+            {/* Top Bar */}
+            <View style={styles.header}>
+                <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
+                    <X size={24} color="#0d1b12" />
+                </TouchableOpacity>
 
-            <TouchableOpacity
-                style={[styles.recordButton, isRecording ? styles.recording : null]}
-                onPress={isRecording ? stopGSR : startGSR}
-                disabled={isProcessing}
-            >
-                <Text style={styles.buttonText}>
-                    {isRecording ? "⏹️ Stop" : "🎤 Record"}
+                <View style={{ alignItems: 'center' }}>
+                    <Text style={[styles.statusText, isListening && styles.statusPulse]}>
+                        {isListening ? "LISTENING..." : "DONE"}
+                    </Text>
+                    <Text style={styles.subStatus}>Inasikiza...</Text>
+                </View>
+
+                <TouchableOpacity style={styles.iconBtn}>
+                    <Settings size={24} color="#94a3b8" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Main Visualizer */}
+            <View style={styles.visualizerArea}>
+                <View style={[styles.micCircle, isListening && styles.micCircleActive]}>
+                    <Mic size={48} color="white" />
+                </View>
+                {/* Ripple rings would act here with Reanimated */}
+                {isListening && <View style={styles.ripple} />}
+            </View>
+
+            {/* Transcription */}
+            <View style={styles.transcriptArea}>
+                <Text style={styles.transcriptText}>
+                    {transcript ? `"${transcript}"` : "..."}
                 </Text>
-            </TouchableOpacity>
+                <Text style={styles.translation}>
+                    {parsedData ? `Spent ${parsedData.amount} on food` : "Speak clearly in Swahili or English"}
+                </Text>
+            </View>
 
-            <TouchableOpacity
-                style={{ marginTop: 20 }}
-                onPress={() => setShowOfflineGuide(true)}
-            >
-                <Text style={{ color: '#2196F3' }}>⚙️ Offline Settings</Text>
-            </TouchableOpacity>
+            {/* Intelligence Card */}
+            {parsedData && (
+                <View style={styles.card}>
+                    <View style={styles.cardHeader}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <RotateCcw size={14} color={colors.primary} />
+                            <Text style={styles.aiLabel}>AI PARSING</Text>
+                        </View>
+                        <View style={styles.confidenceBadge}>
+                            <Text style={styles.confidenceText}>Confidence: {confidence}%</Text>
+                        </View>
+                    </View>
 
-            {isProcessing && (
-                <View style={styles.processingContainer}>
-                    <ActivityIndicator color="#2196F3" />
-                    <Text style={styles.statusText}>{llmStatus || "Processing..."}</Text>
+                    <View style={styles.cardContent}>
+                        <View style={{ flex: 1, gap: 4 }}>
+                            <Text style={styles.fieldLabel}>AMOUNT</Text>
+                            <Text style={styles.amountValue}>KES {parsedData.amount}</Text>
+
+                            <View style={styles.catRow}>
+                                <View style={styles.dot} />
+                                <Text style={styles.catText}>{parsedData.category}</Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.catImageContainer}>
+                            <Image source={{ uri: parsedData.image }} style={styles.catImage} />
+                            <View style={styles.catOverlay}>
+                                <Text style={styles.catOverlayText}>{parsedData.categoryLocal}</Text>
+                            </View>
+                        </View>
+                    </View>
                 </View>
             )}
 
-            {result ? (
-                <View style={styles.resultContainer}>
-                    <Text style={styles.resultLabel}>Heard:</Text>
-                    <Text style={styles.resultText}>{result}</Text>
-                </View>
-            ) : null}
+            {/* Bottom Actions */}
+            <View style={styles.footer}>
+                <View style={styles.actionRow}>
+                    <TouchableOpacity style={styles.cancelBtn} onPress={handleRetry}>
+                        <X size={24} color="#475569" />
+                        <Text style={styles.cancelText}>Ghairi</Text>
+                    </TouchableOpacity>
 
-            <OfflineVoiceGuide
-                visible={showOfflineGuide}
-                onClose={() => setShowOfflineGuide(false)}
-                onOpenSettings={openVoiceSettings}
-            />
+                    <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirm}>
+                        <Check size={24} color="#0d1b12" />
+                        <Text style={styles.confirmText}>Thibitisha</Text>
+                    </TouchableOpacity>
+                </View>
+                <Text style={styles.footerHint}>Tap confirm to add to M-Pesa ledger</Text>
+            </View>
         </View>
     );
 };
 
+// Styles from artifact `voice_expense_capture`
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        padding: 20,
-    },
-    // Review UI Styles
-    card: {
-        width: '100%',
-        backgroundColor: '#fff',
-        borderRadius: 16,
-        padding: 20,
-        elevation: 6,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 8,
-    },
-    formGroup: {
-        width: '100%',
-        marginBottom: 15
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        marginBottom: 5,
-        color: '#555'
-    },
-    input: {
-        backgroundColor: '#f6f7f9',
-        padding: 14,
-        borderRadius: 10,
-        color: '#333',
-        fontSize: 16,
-        borderWidth: 1,
-        borderColor: '#e0e0e0'
-    },
-    row: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        width: '100%',
-        marginTop: 15
-    },
-    btn: {
-        flex: 1,
-        padding: 16,
-        borderRadius: 12,
-        alignItems: 'center',
-        marginHorizontal: 5
-    },
-    btnCancel: {
-        backgroundColor: '#666',
-    },
-    btnConfirm: {
-        backgroundColor: '#3F51B5'
-    },
-    btnText: {
-        color: '#fff',
-        fontWeight: '700',
-        fontSize: 16
-    },
-    // Modal Styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
-        padding: 20
-    },
-    modalContent: {
-        backgroundColor: '#fff',
-        borderRadius: 16,
-        padding: 20,
-        maxHeight: '70%'
-    },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        marginBottom: 15,
-        textAlign: 'center',
-        color: '#333'
-    },
-    detailsRow: {
-        paddingVertical: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee'
-    },
-    detailsLabel: {
-        fontSize: 16,
-        color: '#333'
-    },
-    title: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        marginBottom: 30,
-        color: '#333',
-    },
-    recordButton: {
-        width: 150,
-        height: 150,
-        borderRadius: 75,
-        backgroundColor: '#4CAF50',
-        alignItems: 'center',
-        justifyContent: 'center',
-        elevation: 8,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 5,
-    },
-    recording: {
-        backgroundColor: '#e53935',
-        transform: [{ scale: 1.1 }],
-    },
-    buttonText: {
-        fontSize: 24,
-        color: '#fff',
-        fontWeight: 'bold',
-    },
-    processingContainer: {
-        marginTop: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    statusText: {
-        marginTop: 10,
-        color: '#666',
-    },
-    resultContainer: {
-        marginTop: 30,
-        padding: 15,
-        backgroundColor: '#f5f5f5',
-        borderRadius: 10,
-        width: '100%',
-    },
-    resultLabel: {
-        fontWeight: 'bold',
-        marginBottom: 5,
-        color: '#333',
-    },
-    resultText: {
-        fontSize: 16,
-        color: '#333',
-        lineHeight: 24,
-    },
+    container: { flex: 1, backgroundColor: colors.background, justifyContent: 'space-between' },
+
+    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 24, paddingTop: 60, alignItems: 'center' },
+    iconBtn: { padding: 12, borderRadius: 99, backgroundColor: 'rgba(0,0,0,0.05)' },
+    statusText: { fontSize: 12, fontWeight: 'bold', color: colors.primary, letterSpacing: 1 },
+    statusPulse: { opacity: 0.8 }, // Animation would handle this
+    subStatus: { fontSize: 12, color: '#64748b' },
+
+    visualizerArea: { alignItems: 'center', justifyContent: 'center', height: 160, position: 'relative' },
+    micCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', zIndex: 10, shadowColor: colors.primary, shadowOpacity: 0.4, shadowRadius: 20 },
+    micCircleActive: { transform: [{ scale: 1.1 }] },
+    ripple: { position: 'absolute', width: 200, height: 200, borderRadius: 100, backgroundColor: 'rgba(19, 236, 91, 0.1)' },
+
+    transcriptArea: { paddingHorizontal: 32, alignItems: 'center', gap: 8 },
+    transcriptText: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', color: '#0d1b12' },
+    translation: { fontSize: 16, textAlign: 'center', color: '#64748b', fontStyle: 'italic' },
+
+    card: { marginHorizontal: 24, padding: 20, backgroundColor: 'white', borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 4 },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+    aiLabel: { fontSize: 10, fontWeight: 'bold', color: '#94a3b8' },
+    confidenceBadge: { backgroundColor: 'rgba(19, 236, 91, 0.1)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+    confidenceText: { fontSize: 10, fontWeight: 'bold', color: colors.primaryDark },
+
+    cardContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    fieldLabel: { fontSize: 10, color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1 },
+    amountValue: { fontSize: 24, fontWeight: 'bold', color: '#0d1b12', marginVertical: 4 },
+    catRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+    catText: { fontSize: 14, fontWeight: '600', color: colors.primaryDark },
+
+    catImageContainer: { width: 80, height: 80, borderRadius: 12, overflow: 'hidden', position: 'relative' },
+    catImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+    catOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 4, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center' },
+    catOverlayText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+
+    footer: { padding: 24, width: '100%', backgroundColor: colors.background },
+    actionRow: { flexDirection: 'row', gap: 16, marginBottom: 16 },
+    cancelBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, borderRadius: 16, borderWidth: 2, borderColor: '#e2e8f0' },
+    cancelText: { fontSize: 16, fontWeight: 'bold', color: '#475569' },
+    confirmBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, borderRadius: 16, backgroundColor: colors.primary, shadowColor: colors.primary, shadowOpacity: 0.3, shadowRadius: 10, elevation: 4 },
+    confirmText: { fontSize: 16, fontWeight: 'bold', color: '#0d1b12' },
+    footerHint: { textAlign: 'center', fontSize: 12, color: '#94a3b8' },
 });
 
 export default VoiceInput;

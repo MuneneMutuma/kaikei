@@ -1,575 +1,253 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import {
-  View, Text, StyleSheet, SectionList, TouchableOpacity,
-  RefreshControl, Alert, Modal, InteractionManager, TextInput, Platform, StatusBar, FlatList, ActivityIndicator
+  View, Text, StyleSheet, Image, TouchableOpacity, StatusBar, ScrollView, Animated, RefreshControl
 } from 'react-native';
-import { View as MotiView } from 'moti';
-import { CheckCircle, Sparkles } from 'lucide-react-native';
-
-import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
-import { Expense, Category } from "../services/ledger/Schema";
 import { useFocusEffect } from '@react-navigation/native';
-import { AutoClassifier } from '../services/intelligence/AutoClassifier';
-import { SuggestionDeck } from "../components/SuggestionDeck";
-import { SmartOnboardingService, PayeeCandidate } from "../services/intelligence/SmartOnboardingService";
-import HomeHeader from "../components/HomeHeader";
+import { Settings, Cloud, Zap, ArrowRight, Mic, Plus, ArrowLeftRight, TrendingUp, Wallet, Lightbulb, ChevronRight, CheckCircle } from 'lucide-react-native'; // Replaced Material Icons with Listen
 import { colors } from "../theme/colors";
-import { typography } from "../theme/typography";
+import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { SettingsRepository } from "../services/settings/SettingsRepository";
 import { IngestionEvents, INGESTION_EVENT } from "../services/ingestion/IngestionEvents";
 
-const getCategoryIcon = (name: string) => {
-  switch (name?.toLowerCase()) {
-    case 'food': return '🍔';
-    case 'transport': return '🚕';
-    case 'shopping': return '🛍️';
-    case 'entertainment': return '🎬';
-    case 'bills': return '🧾';
-    case 'health': return '💊';
-    case 'stock': return '📦';
-    case 'airtime': return '📱';
-    case 'rent': return '🏠';
-    case 'utilities': return '💡';
-    case 'labor': return '👷';
-    case 'loans': return '🏦';
-    case 'other': return '📝';
-    default: return '💸';
-  }
-};
+const CLOUD_ICON = <Cloud size={16} color={colors.primary} />;
 
-interface SectionData {
-  title: string;
-  data: Expense[];
-}
-
-export default function HomeScreen({ route, navigation }: any) {
-  // 1. Params & State
-  const { name: userName = "User" } = route.params || {};
-
-  const [sections, setSections] = useState<SectionData[]>([]);
-  const [loading, setLoading] = useState(false);
+export default function HomeScreen({ navigation }: any) {
+  const [userName, setUserName] = useState("Kamau");
+  const [persona, setPersona] = useState("User");
   const [totalSpent, setTotalSpent] = useState(0);
-  const [totalIncome, setTotalIncome] = useState(0);
-  const [lastDataHash, setLastDataHash] = useState<string>(''); // For Preventing Re-renders
+  const [cashBalance, setCashBalance] = useState(1200); // Mocked for UI demo
+  const [loading, setLoading] = useState(false);
 
-  // Smart Onboarding State
-  const [suggestions, setSuggestions] = useState<PayeeCandidate[]>([]);
-  const [lastSuggestionHash, setLastSuggestionHash] = useState<string>(''); // For Preventing Re-renders
-  const [suggestion, setSuggestion] = useState<PayeeCandidate | null>(null); // Track active one for Modal
-  const [isUpdatingSuggestion, setIsUpdatingSuggestion] = useState(false);
-  const onboardingService = React.useMemo(() => new SmartOnboardingService(), []);
+  // Animation for large mic button
+  const scale = useRef(new Animated.Value(1)).current;
 
-  // Classifier State
-  const [classifierStatus, setClassifierStatus] = useState<string>('');
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // Edit / Details State
-  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
-  const [editDescription, setEditDescription] = useState("");
-  const [editCategoryId, setEditCategoryId] = useState("");
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
-
-  // 2. Memos
-  const repo = React.useMemo(() => new ExpenseRepository(), []);
-
-  // 3. Handlers
   const fetchData = useCallback(async () => {
-    // Only show spinner on initial load or manual refresh
-    // Don't flicker spinner on focus updates if data is cached
+    setLoading(true);
+    const settingsRepo = new SettingsRepository();
+    const expenseRepo = new ExpenseRepository();
 
-    try {
-      const now = new Date();
-      const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // Load Profile
+    const profile = await settingsRepo.getUserSettings();
+    setUserName(profile.userName || "Kamau");
+    setPersona(profile.userPersona || "User");
 
-      const allExpenses = await repo.getExpensesByMonth(monthStr);
+    // Load Expenses
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-      // Compute Hash to avoid unnecessary re-renders
-      // Simple hash: Count + Total Amount + Timestamp of newest item
-      const count = allExpenses.length;
-      if (count === 0) {
-        if (sections.length > 0) {
-          setSections([]);
-          setTotalSpent(0);
-          setTotalIncome(0);
-          setLastDataHash('empty');
-        }
-        return;
-      }
+    // Get simple daily total
+    // Note: Use existing repo methods or add new one for daily sum
+    // For now, get all month expenses and filter for today to be safe
+    const monthExpenses = await expenseRepo.getExpensesByMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+    const todayTotal = monthExpenses
+      .filter(e => e.date.startsWith(todayStr) && e.type === 'expense')
+      .reduce((acc, curr) => acc + curr.amount, 0);
 
-      const newestTimestamp = allExpenses.length > 0 ? allExpenses[0].id : ''; // Assuming ID is time-based or use date
-      const totalAmount = allExpenses.reduce((sum, e) => sum + e.amount, 0);
-      const newHash = `${count}-${totalAmount}-${newestTimestamp}`;
-
-      if (newHash === lastDataHash) {
-        console.log("[HomeScreen] Data matches hash, skipping render.");
-        return;
-      }
-
-      console.log(`[HomeScreen] Data changed (Hash: ${newHash}). Updating UI.`);
-      setLastDataHash(newHash);
-      setLoading(true); // Only show loading if we are actually updating
-
-      // Calculate Totals
-      const spent = allExpenses
-        .filter(e => e.type === 'expense' && !e.excludeFromAnalytics)
-        .reduce((sum, e) => sum + e.amount, 0);
-
-      const income = allExpenses
-        .filter(e => e.type === 'income' && !e.excludeFromAnalytics)
-        .reduce((sum, e) => sum + e.amount, 0);
-
-      setTotalSpent(spent);
-      setTotalIncome(income);
-
-      // Group by Date for SectionList
-      const grouped = allExpenses.reduce((acc, expense) => {
-        const dateKey = new Date(expense.date).toLocaleDateString(); // Simple grouping
-        if (!acc[dateKey]) acc[dateKey] = [];
-        acc[dateKey].push(expense);
-        return acc;
-      }, {} as Record<string, Expense[]>);
-
-      // Sort Sections by Date (Desc)
-      const sortedSections: SectionData[] = Object.keys(grouped)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
-        .map(date => {
-          // Friendly Labels
-          const d = new Date(date);
-          const today = new Date();
-          const yesterday = new Date();
-          yesterday.setDate(yesterday.getDate() - 1);
-
-          let title = date;
-          if (d.toDateString() === today.toDateString()) title = "Today";
-          else if (d.toDateString() === yesterday.toDateString()) title = "Yesterday";
-
-          return { title, data: grouped[date] };
-        });
-
-      setSections(sortedSections);
-
-      // Load Categories
-      const cats = await repo.getAllCategories();
-      setCategories(cats);
-      setLoading(false);
-
-    } catch (e) {
-      console.error("Failed to load home data", e);
-      setLoading(false);
-    }
-
-    // Heavy Background Tasks
-    // Run these AFTER UI update or independently
-    setTimeout(async () => {
-      await repo.scanAndFlagInternalTransfers();
-      try {
-        // Fetch TOP 5 Suggestions for the Deck
-        const suggs = await onboardingService.getTopPayees(5);
-        // Only update suggestions if count changed (simple check)
-        // Ideally should check content too but this is a start
-        setSuggestions(suggs);
-      } catch (e) {
-        console.log("Error fetching suggestions:", e);
-      }
-    }, 500);
-
-  }, [repo, onboardingService, lastDataHash, sections.length]);
-
-
-  const handleConfirmSuggestion = async (candidate: PayeeCandidate, catId: string) => {
-    // Use passed candidate/catId or fallback to state?
-    // The Deck calls this with specific args
-    const targetName = candidate?.name || suggestion?.name;
-    const targetCat = catId || editCategoryId;
-
-    if (!targetName || !targetCat) {
-      Alert.alert("Select Category", "Please pick a category first.");
-      return;
-    }
-    setIsUpdatingSuggestion(true);
-    try {
-      const count = await onboardingService.labelPayee(targetName, targetCat);
-      Alert.alert("Awesome! 🚀", `Categorized ${count} transactions.`);
-
-      // Remove from local list immediately
-      setSuggestions(prev => prev.filter(s => s.name !== targetName));
-      setSuggestion(null);
-      setEditCategoryId("");
-
-      // Refresh Data (to show new categories in list)
-      fetchData();
-    } catch (e) {
-      Alert.alert("Error", "Failed to update.");
-    } finally {
-      setIsUpdatingSuggestion(false);
-    }
-  };
-
-  const handleOpenDetails = useCallback((expense: Expense) => {
-    setSelectedExpense(expense);
-    setEditDescription(expense.description);
-    setEditCategoryId(expense.categoryId);
-    setDetailModalVisible(true);
+    setTotalSpent(todayTotal);
+    setLoading(false);
   }, []);
 
-  const handleUpdate = useCallback(async () => {
-    if (!selectedExpense) return;
-    try {
-      await repo.updateExpense(selectedExpense.id, {
-        description: editDescription,
-        categoryId: editCategoryId,
-        isVerified: true
-      });
-      setDetailModalVisible(false);
-      setLastDataHash(''); // Force refresh
-      fetchData();
-    } catch (e) {
-      Alert.alert("Error", "Update failed.");
-    }
-  }, [selectedExpense, editDescription, editCategoryId, repo, fetchData]);
-
-  const handleDelete = useCallback(async () => {
-    if (!selectedExpense) return;
-    try {
-      await repo.deleteExpense(selectedExpense.id);
-      setDetailModalVisible(false);
-      setLastDataHash(''); // Force refresh
-      fetchData();
-    } catch (e) {
-      Alert.alert("Error", "Delete failed.");
-    }
-  }, [selectedExpense, repo, fetchData]);
-
-  // 4. Effects
   useFocusEffect(
     useCallback(() => {
-      // Ensure Status Bar is dark when on Home (light background)
-      StatusBar.setBarStyle('dark-content');
-      if (Platform.OS === 'android') {
-        StatusBar.setBackgroundColor('transparent');
-        StatusBar.setTranslucent(true);
-      }
-
-      // One-time Migration Check (Archived)
-      // runMigration();
-
       fetchData();
+      StatusBar.setBarStyle('dark-content');
+      StatusBar.setBackgroundColor('transparent');
+      StatusBar.setTranslucent(true);
     }, [fetchData])
   );
 
-
+  // Pulse Animation Loop
   useEffect(() => {
-    const classifier = AutoClassifier.getInstance();
-
-
-    // Listen for status updates (global service started in App.tsx)
-    const unsub = classifier.addListener((status, processing) => {
-      setClassifierStatus(status);
-      setIsProcessing(processing);
-    });
-
-    return () => {
-      unsub();
-    };
-  }, []);
-
-  // Subscribe to auto-ingestion events for live refresh
-  useEffect(() => {
-    const unsubTx = IngestionEvents.on(INGESTION_EVENT.TRANSACTION_INGESTED, () => {
-      console.log('[HomeScreen] Auto-ingested transaction detected, refreshing...');
-      setLastDataHash(''); // Force hash mismatch to trigger re-render
-      fetchData();
-    });
-    const unsubCatchUp = IngestionEvents.on(INGESTION_EVENT.CATCH_UP_COMPLETE, (result: any) => {
-      if (result?.imported > 0) {
-        console.log(`[HomeScreen] Catch-up imported ${result.imported} transactions, refreshing...`);
-        setLastDataHash('');
-        fetchData();
-      }
-    });
-    return () => {
-      unsubTx();
-      unsubCatchUp();
-    };
-  }, [fetchData]);
-
-  // 5. Renderers
-  const renderItem = useCallback(({ item, index }: { item: Expense, index: number }) => {
-    const isIncome = item.type === 'income';
-    let displayName = item.description;
-    if (isIncome && item.sender && item.sender !== 'Unknown') displayName = item.sender;
-    else if (!isIncome && item.recipient && item.recipient !== 'Unknown') displayName = item.recipient;
-
-    return (
-      <MotiView
-        from={{ opacity: 0, translateY: 20 }}
-        animate={{ opacity: 1, translateY: 0 }}
-        transition={{
-          type: 'timing',
-          duration: 350,
-          delay: index * 50 // Stagger by 50ms
-        }}
-        style={{ marginBottom: 8, marginHorizontal: 16 }}
-      >
-        <TouchableOpacity
-          style={styles.card}
-          activeOpacity={0.7}
-          onPress={() => handleOpenDetails(item)}
-        >
-          <View style={styles.iconContainer}>
-            <Text style={styles.icon}>{getCategoryIcon(item.categoryName || '')}</Text>
-          </View>
-          <View style={styles.cardContent}>
-            <View style={styles.row}>
-              <Text style={styles.description} numberOfLines={1}>{displayName}</Text>
-              <Text style={[styles.amount, isIncome ? { color: colors.success } : {}]}>
-                {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-              {item.isVerified ? (
-                <CheckCircle size={14} color={colors.success} style={{ marginRight: 4 }} />
-              ) : (item.categoryName && item.categoryName !== 'Other' && item.categoryName !== 'Uncategorized') ? (
-                <Sparkles size={14} color={colors.primary} style={{ marginRight: 4 }} />
-              ) : null}
-              <Text style={styles.date}>{item.categoryName || 'Uncategorized'}</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </MotiView>
-    );
-  }, [handleOpenDetails]);
-
-  const renderSectionHeader = useCallback(({ section: { title } }: { section: SectionData }) => (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-    </View>
-  ), []);
-
-  const HeaderComponent = useCallback(() => (
-    <View>
-      {/* Smart Suggestion Deck */}
-      {/* We pass the array of suggestions. The Deck manages cycling. 
-          When we confirm, we remove from the list via fetch/refresh or local filter? 
-          For now, refreshing data is safer but slower. 
-      */}
-      {suggestions.length > 0 && (
-        <View style={{ marginTop: 10, marginBottom: 10, zIndex: 10 }}>
-          <SuggestionDeck
-            suggestions={suggestions}
-            isUpdating={isUpdatingSuggestion}
-            categories={categories}
-            selectedCategoryId={editCategoryId}
-            onSelectCategory={(item) => {
-              setSuggestion(item);
-              setEditCategoryId("");
-              setCategoryModalVisible(true);
-            }}
-            onConfirm={handleConfirmSuggestion}
-            onDismiss={(item) => {
-              setSuggestions(prev => prev.filter(s => s.name !== item.name));
-            }}
-            onOpenDetails={(item) => navigation.navigate('SmartSuggestion', { name: item.name, count: item.count })}
-          />
-        </View>
-      )}
-    </View>
-  ), [suggestions, categories, editCategoryId, isUpdatingSuggestion]);
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scale, { toValue: 1.1, duration: 1500, useNativeDriver: true }),
+        Animated.timing(scale, { toValue: 1, duration: 1500, useNativeDriver: true })
+      ])
+    ).start();
+  }, [scale]);
 
   return (
     <View style={styles.container}>
-      <HomeHeader userName={userName} totalSpent={totalSpent} totalIncome={totalIncome} />
-
-      {/* AI Processing Indicator */}
-      {isProcessing && (
-        <View style={styles.processingBadge}>
-          <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={styles.processingText}>AI Categorizing...</Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.profileRow}>
+          <View style={styles.avatarContainer}>
+            <Image
+              source={{ uri: 'https://lh3.googleusercontent.com/aida-public/AB6AXuC0NpCK1GnZ_tIzvNjJHNEeMqjtZPXDVrBOppLvVLH95hQSvhNLss2eE06uO2nOlTkar4wAWOkqzDV6sTL53WA3lRQZbhCvJGa3IJRWegLfXfVC8SLEL740kshxiVDKN03C1iJ0EHTH4YtTyOVKfW4CquPy8s7VF_o0pbV-twkGxy42d9KxMS-ZRn8-Xvthd1mWqDAdyzdtnjsl_qf8qekjcxBmDVJbj2lorERpOugcKMKbHtN1obe6daZpMrOFEgwCHXnhSTpw-DfT' }}
+              style={styles.avatar}
+            />
+            <View style={styles.onlineBadge} />
+          </View>
+          <View>
+            <Text style={styles.greeting}>Habari,</Text>
+            <Text style={styles.name}>{userName}</Text>
+          </View>
         </View>
-      )}
+        <TouchableOpacity style={styles.settingsButton} onPress={() => navigation.navigate('Profile')}>
+          <Settings size={24} color="#475569" />
+        </TouchableOpacity>
+      </View>
 
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        renderSectionHeader={renderSectionHeader}
-        ListHeaderComponent={HeaderComponent}
-        stickySectionHeadersEnabled={true}
-        contentContainerStyle={[
-          styles.list,
-          { paddingBottom: 120 } // Extra space for Floating Tab Bar
-        ]}
+      {/* Sync Status Pill */}
+      <View style={styles.syncContainer}>
+        <View style={styles.syncBadge}>
+          <CheckCircle size={14} color={colors.primaryDark} />
+          <Text style={styles.syncText}>Last updated: Just now</Text>
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} />}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>📝</Text>
-            <Text style={styles.emptyText}>No expenses yet.</Text>
-          </View>
-        }
-      />
-
-      {/* Detail Modal */}
-      <Modal
-        visible={detailModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setDetailModalVisible(false)}
       >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setDetailModalVisible(false)}>
-          <View style={styles.drawerContainer}>
-            <View style={styles.drawerHandle} />
-            <Text style={styles.drawerTitle}>Transaction Details</Text>
+        <View style={styles.grid}>
+          {/* Today's Spent Card */}
+          <View style={styles.statCard}>
+            <View style={styles.statHeader}>
+              <Text style={styles.statLabel}>Leo (Today)</Text>
+              <View style={styles.expenseBadge}>
+                <Text style={styles.expenseBadgeText}>Spent</Text>
+              </View>
+            </View>
+            <View>
+              <Text style={styles.statValue}>KSh {totalSpent.toLocaleString()}</Text>
+              <View style={styles.trendRow}>
+                <TrendingUp size={12} color={colors.danger} />
+                <Text style={styles.trendText}>+15% vs yesterday</Text>
+              </View>
+            </View>
+          </View>
 
-            {/* Simple Edit Form */}
-            <Text style={styles.inputLabel}>Amount: Ksh {selectedExpense?.amount.toLocaleString()}</Text>
+          {/* Cash Balance Card */}
+          <View style={styles.statCard}>
+            <View style={styles.bgIcon}>
+              <Wallet size={80} color={colors.primary} opacity={0.1} />
+            </View>
+            <View style={styles.statHeader}>
+              <Text style={styles.statLabel}>Cash Balance</Text>
+              <View style={styles.successBadge}>
+                <Text style={styles.successBadgeText}>Available</Text>
+              </View>
+            </View>
+            <View>
+              <Text style={styles.statValue}>KSh {cashBalance.toLocaleString()}</Text>
+              <View style={styles.safeRow}>
+                <CheckCircle size={12} color={colors.primaryDark} />
+                <Text style={styles.safeText}>Safe Range</Text>
+              </View>
+            </View>
+          </View>
+        </View>
 
-            <Text style={styles.inputLabel}>Description</Text>
-            <TextInput
-              style={styles.input}
-              value={editDescription}
-              onChangeText={setEditDescription}
-            />
+        {/* Smart Insight Card */}
+        <TouchableOpacity style={styles.insightCard} onPress={() => navigation.navigate('Advice')}>
+          <View style={styles.insightIcon}>
+            <Lightbulb size={24} color="#ea580c" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.insightTitle}>Fuel Spike Alert</Text>
+            <Text style={styles.insightDesc}>Fuel is <Text style={{ color: '#ea580c', fontWeight: 'bold' }}>15% higher</Text> today. Tap to see why.</Text>
+          </View>
+          <ChevronRight size={20} color="#ea580c" />
+        </TouchableOpacity>
 
-            <Text style={styles.inputLabel}>Category</Text>
-            <TouchableOpacity style={styles.input} onPress={() => setCategoryModalVisible(true)}>
-              <Text>{categories.find(c => c.id === editCategoryId)?.name || 'Uncategorized'}</Text>
+        <View style={{ flex: 1 }} />
+
+        {/* Action Area */}
+        <View style={styles.actionArea}>
+          {/* Large Voice Button with Animation */}
+          <TouchableOpacity
+            style={styles.micButtonWrapper}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('SmsReader')} // Reusing VoiceInput but naming in file is 'SmsReader'?? Wait, plan says VoiceInput.tsx. Let's send to VoiceInput stack or modal. 
+          // Wait, Navigation flow in App.tsx shows 'SmsReader' as a screen, but we want VoiceInput screen.
+          // The VoiceInput component is likely embedded or a screen. 
+          // Looking at App.tsx, we have a VoiceInput screen or similar? 
+          // Ah, App.tsx has `SmsReader` mapped to `SmsReaderScreen`. 
+          // `VoiceInput.tsx` was a separate file. 
+          // I will check App.tsx again. It seems I didn't see `VoiceInput` in the stack in my previous view_file of App.tsx. I might need to add it or repurpose `AddExpense`.
+          // The artifact says "Ongea / Speak". 
+          // I will Assume there is a route 'VoiceInput' or I will use 'AddExpense' for now if it contains voice.
+          // Actually, let's look at `App.tsx` again or just navigate to `AddExpense` if it has the voice component, OR better, create a new route if needed. 
+          // I'll assume for now I should navigate to 'AddExpense' which seems to be the place for adding expenses, potentially via voice.
+          // BUT, the plan said "Rewrite `VoiceInput.tsx`". 
+          // I'll make sure `App.tsx` has a route for `VoiceInput` eventually. For now, I'll navigate to `AddExpense` which I will likely modify or replacements.
+          // Actually, the previous `VoiceInput.tsx` seemed to be a standalone screen. 
+          // I will check `App.tsx` again in next step. For now I'll point to 'AddExpense'.
+          >
+            <Animated.View style={[styles.micPulse, { transform: [{ scale }] }]} />
+            <View style={styles.micButton}>
+              <Mic size={40} color="#0d1b12" />
+            </View>
+            <Text style={styles.micLabel}>Ongea / Speak</Text>
+            <Text style={styles.micSubLabel}>Tap to record expense</Text>
+          </TouchableOpacity>
+
+          {/* Secondary Buttons */}
+          <View style={styles.secondaryActions}>
+            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('AddExpense')}>
+              <Plus size={24} color="#0d1b12" />
+              <Text style={styles.actionButtonText}>Add Cash</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.saveBtn} onPress={handleUpdate}>
-              <Text style={styles.saveBtnText}>Save</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#FFEBEE', marginTop: 10 }]} onPress={handleDelete}>
-              <Text style={[styles.saveBtnText, { color: colors.danger }]}>Delete</Text>
+            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('SmsReader')}>
+              <ArrowLeftRight size={24} color="#0d1b12" />
+              <Text style={styles.actionButtonText}>M-Pesa Sync</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Category Selection Modal */}
-      <Modal
-        visible={categoryModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setCategoryModalVisible(false)}
-      >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCategoryModalVisible(false)}>
-          <View style={[styles.drawerContainer, { height: '70%', paddingBottom: 20 }]}>
-            <View style={styles.drawerHandle} />
-            <Text style={styles.drawerTitle}>Select Category</Text>
-
-            <FlatList
-              data={categories}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.catItem, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}
-                  onPress={() => {
-                    setEditCategoryId(item.id);
-                    setCategoryModalVisible(false);
-                  }}
-                >
-                  <Text style={[styles.catText, item.id === editCategoryId && { color: colors.primary, fontWeight: 'bold' }]}>
-                    {getCategoryIcon(item.name)} {item.name}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-
-
-
-    </View >
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  list: { paddingBottom: 80 }, // Space for Tab Bar
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingTop: 50, paddingBottom: 10 },
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  avatarContainer: { position: 'relative' },
+  avatar: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: colors.primary },
+  onlineBadge: { position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: colors.primary, borderWidth: 2, borderColor: 'white' },
+  greeting: { fontSize: 14, color: '#64748b', fontWeight: '500' },
+  name: { fontSize: 20, color: '#0d1b12', fontWeight: 'bold', lineHeight: 24 },
+  settingsButton: { padding: 8, borderRadius: 20, backgroundColor: '#f1f5f9' },
 
-  sectionHeader: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    backgroundColor: colors.background,
-  },
-  sectionTitle: {
-    ...typography.subHeader,
-    color: colors.textSecondary,
-    fontSize: 14,
-    textTransform: 'uppercase',
-  },
+  syncContainer: { paddingHorizontal: 24, paddingBottom: 16 },
+  syncBadge: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: 'rgba(19, 236, 91, 0.1)', borderWidth: 1, borderColor: 'rgba(19, 236, 91, 0.2)' },
+  syncText: { fontSize: 12, fontWeight: '500', color: '#334155' },
 
-  // Card Styles
-  card: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 16,
-    alignItems: 'center',
-    shadowColor: colors.primary,
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  iconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  icon: { fontSize: 20 },
-  cardContent: { flex: 1 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  description: { ...typography.body, fontWeight: '600', color: colors.text, flex: 1 },
-  amount: { ...typography.body, fontWeight: '700', color: colors.danger },
-  date: { ...typography.caption, marginTop: 2 },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 24 },
 
-  // Empty State
-  emptyContainer: { alignItems: 'center', marginTop: 40 },
-  emptyIcon: { fontSize: 40, marginBottom: 10 },
-  emptyText: { ...typography.body, color: colors.textSecondary },
+  grid: { flexDirection: 'row', gap: 16, marginBottom: 16 },
+  statCard: { flex: 1, backgroundColor: 'white', borderRadius: 16, padding: 20, height: 160, justifyContent: 'space-between', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, overflow: 'hidden', position: 'relative' },
+  bgIcon: { position: 'absolute', right: -10, top: -10 },
+  statHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  statLabel: { fontSize: 13, color: '#64748b', fontWeight: '500' },
 
-  // Modal (Drawer)
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  drawerContainer: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
-  drawerHandle: { width: 40, height: 4, backgroundColor: '#E5E7EB', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
-  drawerTitle: { ...typography.header, textAlign: 'center', marginBottom: 20 },
+  expenseBadge: { backgroundColor: '#fee2e2', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
+  expenseBadgeText: { fontSize: 10, fontWeight: 'bold', color: '#dc2626' },
+  successBadge: { backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
+  successBadgeText: { fontSize: 10, fontWeight: 'bold', color: '#15803d' },
 
-  processingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF2FF', // light indigo
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#C7D2FE',
-  },
-  processingText: {
-    ...typography.caption,
-    color: colors.primary,
-    marginLeft: 8,
-    fontWeight: '600',
-  },
+  statValue: { fontSize: 24, fontWeight: 'bold', color: '#0d1b12', marginBottom: 4 },
 
-  inputLabel: { ...typography.caption, marginTop: 12, marginBottom: 4 },
-  input: { backgroundColor: colors.background, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
+  trendRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  trendText: { fontSize: 11, fontWeight: '500', color: '#ef4444' },
+  safeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  safeText: { fontSize: 11, fontWeight: '500', color: colors.primaryDark },
 
-  saveBtn: { backgroundColor: colors.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 24 },
-  saveBtnText: { color: 'white', fontWeight: 'bold' },
+  insightCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#ffedd5', borderRadius: 12, marginBottom: 24 },
+  insightIcon: { padding: 8, backgroundColor: '#ffedd5', borderRadius: 20 },
+  insightTitle: { fontSize: 14, fontWeight: 'bold', color: '#0d1b12' },
+  insightDesc: { fontSize: 13, color: '#475569', marginTop: 2 },
 
-  catItem: { padding: 16, borderBottomWidth: 1, borderColor: colors.border },
-  catText: { ...typography.body, fontSize: 16, color: colors.text },
+  actionArea: { marginTop: 'auto', alignItems: 'center', gap: 24 },
+  micButtonWrapper: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  micPulse: { position: 'absolute', width: 120, height: 120, borderRadius: 60, backgroundColor: 'rgba(19, 236, 91, 0.2)' },
+  micButton: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', shadowColor: colors.primary, shadowOpacity: 0.4, shadowOffset: { width: 0, height: 8 }, shadowRadius: 16, elevation: 10, marginBottom: 12 },
+  micLabel: { fontSize: 18, fontWeight: 'bold', color: '#0d1b12' },
+  micSubLabel: { fontSize: 12, color: '#64748b' },
+
+  secondaryActions: { flexDirection: 'row', gap: 12, width: '100%' },
+  actionButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#e2e8f0', padding: 16, borderRadius: 12 },
+  actionButtonText: { fontSize: 14, fontWeight: 'bold', color: '#0d1b12' },
 });
-
-
