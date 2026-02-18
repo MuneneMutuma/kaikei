@@ -1,82 +1,99 @@
-import React, { useState, useEffect } from 'react';
-import { TouchableOpacity, Text, View, StatusBar } from 'react-native';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Home, Lightbulb, User, PlusCircle, BarChart3 } from 'lucide-react-native';
-import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
-
-import SetupScreen from './src/screens/SetupScreen';
-import HomeScreen from './src/screens/HomeScreen';
-import AddExpenseScreen from './src/screens/AddExpenseScreen';
-import SmsReaderScreen from './src/screens/SmsReaderScreen';
-import AiManagementScreen from './src/screens/AiManagementScreen';
-
-
-
-
-import AnalyticsScreen from './src/screens/AnalyticsScreen';
-import AdviceScreen from './src/screens/AdviceScreen';
-import { SmartSuggestionScreen } from './src/screens/SmartSuggestionScreen';
-import { Database } from './src/services/ledger/Database';
-import { colors } from './src/theme/colors';
-import ProfileScreen from './src/screens/ProfileScreen';
+import { View, Text, StyleSheet, Platform, PermissionsAndroid, Linking, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SettingsRepository } from './src/services/settings/SettingsRepository';
-// Import IngestionService at module scope so Headless JS task is registered immediately
 import { IngestionService } from './src/services/ingestion/IngestionService';
 import { AutoClassifier } from './src/services/intelligence/AutoClassifier';
+import { Database } from './src/services/ledger/Database';
+import { colors } from './src/theme/colors';
 
-export type RootStackParamList = {
-  Setup: undefined;
-  MainTabs: undefined; // The Tab Navigator
-  AddExpense: undefined;
-  SmsReader: undefined;
-  AiManagement: undefined;
-  SmartSuggestion: { name: string; count: number };
-};
+// Screens
+import HomeScreen from './src/screens/HomeScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import SetupScreen from './src/screens/SetupScreen';
+import SmsReaderScreen from './src/screens/SmsReaderScreen'; // Legacy for debug
+import VoiceInput from './src/screens/VoiceInput';
+import AdviceScreen from './src/screens/AdviceScreen';
+import AnalyticsScreen from './src/screens/AnalyticsScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
 
-export type MainTabParamList = {
-  Home: undefined;
-  Advice: undefined;
-  Import: undefined; // Floating Button Placeholder
-  Analytics: undefined;
-  Profile: undefined;
-};
+// Icons
+import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus } from 'lucide-react-native';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-// Placeholder for Settings until implemented
-const SettingsScreenPlaceholder = () => (
-  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-    <Text>Settings &amp; Profile (Coming Soon)</Text>
-  </View>
+export type RootStackParamList = {
+  Onboarding: undefined;
+  Setup: { name: string; persona: string };
+  MainTabs: undefined;
+  SmsReader: undefined;
+  AddExpense: undefined; // Generic add expense (voice/manual)
+  SmartSuggestion: { name: string, count: number };
+  Profile: undefined;
+};
+
+export type MainTabParamList = {
+  Home: undefined;
+  Ledger: undefined;
+  Voice: undefined; // Placeholder for FAB
+  Advice: undefined;
+  Profile: undefined;
+};
+
+// Custom FAB Component for the center button
+const VoiceFabButton = ({ onPress }: { onPress: () => void }) => (
+  <TouchableOpacity
+    style={{
+      top: -24,
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: colors.primary,
+      shadowOpacity: 0.3,
+      shadowRadius: 10,
+      elevation: 8,
+    }}
+    onPress={onPress}
+  >
+    <View style={{
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 4,
+      borderColor: colors.background,
+    }}>
+      <Mic size={32} color="#0d1b12" />
+    </View>
+  </TouchableOpacity>
 );
 
-// Custom FAB Component for the middle button
-const ImportPlaceholder = () => null;
-
-const MainTabs = () => {
+function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
+        tabBarShowLabel: true,
         tabBarStyle: {
-          borderTopWidth: 0,
-          elevation: 10,
-          backgroundColor: colors.surface,
-          paddingTop: 0,
-          // paddingBottom: 80, // Extra spacing requested by user
-          height: 68, // Taller tab bar
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          elevation: 0,
+          backgroundColor: 'white',
+          borderTopWidth: 1,
+          borderTopColor: '#f1f5f9',
+          height: 70,
+          paddingBottom: 10,
+          paddingTop: 10,
         },
-        tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '600',
-        },
+        tabBarActiveTintColor: colors.primaryDark,
+        tabBarInactiveTintColor: '#94a3b8',
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 4 },
       }}
     >
       <Tab.Screen
@@ -84,160 +101,145 @@ const MainTabs = () => {
         component={HomeScreen}
         options={{
           tabBarLabel: 'Home',
-          tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => <LayoutDashboard size={24} color={color} />
         }}
       />
+      <Tab.Screen
+        name="Ledger"
+        component={AnalyticsScreen} // Analytics is now the Ledger
+        options={{
+          tabBarLabel: 'Ledger',
+          tabBarIcon: ({ color, size }) => <Wallet size={24} color={color} />
+        }}
+      />
+
+      {/* Center Voice Button */}
+      <Tab.Screen
+        name="Voice"
+        component={VoiceViewPlaceholder} // Dummy component
+        options={({ navigation }) => ({
+          tabBarButton: (props) => (
+            <VoiceFabButton onPress={() => (navigation as any).navigate('AddExpense')} />
+          ),
+          tabBarLabel: '',
+        })}
+      />
+
       <Tab.Screen
         name="Advice"
         component={AdviceScreen}
         options={{
           tabBarLabel: 'Advice',
-          tabBarIcon: ({ color, size }) => <Lightbulb color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => <Lightbulb size={24} color={color} />
         }}
       />
-
-      {/* Central "Add" Button - Triggers Action Sheet or Navigation */}
-      <Tab.Screen
-        name="Import"
-        component={ImportPlaceholder}
-        options={({ navigation }) => ({
-          tabBarLabel: () => null,
-          tabBarIcon: ({ size }) => (
-            <View style={{
-              marginTop: -24,
-              backgroundColor: colors.primary,
-              padding: 12,
-              borderRadius: 30,
-              elevation: 5,
-              shadowColor: colors.primary,
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.3,
-              shadowRadius: 4,
-            }}>
-              <PlusCircle color="white" size={32} />
-            </View>
-          ),
-          tabBarButton: (props) => {
-            const { onPress, onLongPress, accessibilityState, accessibilityLabel } = props;
-            return (
-              <TouchableOpacity
-                onPress={() => (navigation as any).navigate('AddExpense')}
-                onLongPress={onLongPress || undefined}
-                accessibilityState={accessibilityState}
-                accessibilityLabel={accessibilityLabel}
-                style={props.style}
-              >
-                {props.children}
-              </TouchableOpacity>
-            );
-          },
-        })}
-      />
-
-      <Tab.Screen
-        name="Analytics"
-        component={AnalyticsScreen}
-        options={{
-          tabBarLabel: 'Analytics',
-          tabBarIcon: ({ color, size }) => <BarChart3 color={color} size={size} />,
-        }}
-      />
-
-
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Profile',
-          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => <User size={24} color={color} />
         }}
       />
     </Tab.Navigator>
   );
-};
+}
 
-const App = () => {
-  const [initialRoute, setInitialRoute] = useState<"Setup" | "MainTabs">("Setup");
-  const [loading, setLoading] = useState(true);
+const VoiceViewPlaceholder = () => <View style={{ flex: 1, backgroundColor: colors.background }} />;
+
+export default function App() {
+  const [isDbReady, setIsDbReady] = useState(false);
+  const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const init = async () => {
+    const initApp = async () => {
       try {
+        // 1. Initialize Database
+        console.log('App: Initializing Database...');
         await Database.init();
-        console.log('Database initialized successfully');
+        setIsDbReady(true);
 
+        // 2. Check Setup Status (only after DB is ready)
         const settings = new SettingsRepository();
-        const isComplete = await settings.isOnboardingComplete();
-        if (isComplete) {
-          setInitialRoute("MainTabs");
-        }
+        const isSetup = await settings.isOnboardingComplete();
+        setIsFirstLaunch(!isSetup);
 
-        // Start auto-ingestion if enabled
-        try {
-          await IngestionService.start();
-          // Start AI Classifier globally (runs in background)
-          AutoClassifier.getInstance().start();
-        } catch (e) {
-          console.warn('IngestionService startup (non-critical):', e);
-        }
+
+
+        // 4. Start Services (only after DB is ready)
+        console.log('App: Starting Background Services...');
+        // Note: IngestionService is a singleton instance export, not a class we instantiate here
+        // But accessing properties or methods typically needs initialization if they assume DB presence
+        await IngestionService.start();
+        await AutoClassifier.getInstance().start();
+
       } catch (e) {
-        console.error('Failed to initialize:', e);
-      } finally {
-        setLoading(false);
+        console.error('App Initialization Failed:', e);
+        Alert.alert("Initialization Error", "Failed to start Kaikei database.");
       }
     };
-    init();
 
-    return () => {
-      // Cleanup ingestion on unmount
-      IngestionService.stop();
-    };
+    // Delay slightly to ensure Activity is attached for permissions
+    const timer = setTimeout(() => {
+      initApp();
+    }, 500);
+
+    return () => clearTimeout(timer);
   }, []);
 
-  if (loading) return null; // Or a splash screen
+
+
+  if (!isDbReady || isFirstLaunch === null) {
+    // Splash Loading State
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={{ marginTop: 16, color: colors.primaryDark, fontWeight: 'bold' }}>Starting Kaikei...</Text>
+      </View>
+    );
+  }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <BottomSheetModalProvider>
-          <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-          <NavigationContainer>
-            <Stack.Navigator
-              initialRouteName={initialRoute}
-              screenOptions={{ headerShown: false }}
-            >
-              <Stack.Screen
-                name="Setup"
-                component={SetupScreen}
-              />
-              <Stack.Screen
-                name="MainTabs"
-                component={MainTabs}
-              />
-              <Stack.Screen
-                name="AddExpense"
-                component={AddExpenseScreen}
-              />
-              <Stack.Screen
-                name="SmsReader"
-                component={SmsReaderScreen}
-              />
-              <Stack.Screen
-                name="SmartSuggestion"
-                component={SmartSuggestionScreen}
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="AiManagement"
-                component={AiManagementScreen}
-                options={{ headerShown: false }}
-              />
-            </Stack.Navigator>
-          </NavigationContainer>
-        </BottomSheetModalProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
-  );
-};
+    <NavigationContainer theme={{
+      dark: false,
+      colors: {
+        primary: colors.primary,
+        background: colors.surface, // Default to White for Onboarding/Setup
+        card: 'white',
+        text: '#0d1b12',
+        border: '#e2e8f0',
+        notification: colors.danger,
+      },
+      fonts: {
+        regular: { fontFamily: 'System', fontWeight: '400' },
+        medium: { fontFamily: 'System', fontWeight: '500' },
+        bold: { fontFamily: 'System', fontWeight: '700' },
+        heavy: { fontFamily: 'System', fontWeight: '800' },
+      }
+    }}>
+      <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
+        {isFirstLaunch ? (
+          <>
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+            <Stack.Screen name="Setup" component={SetupScreen} />
+            <Stack.Screen name="MainTabs" component={MainTabs} />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="MainTabs" component={MainTabs} />
+            <Stack.Screen name="Setup" component={SetupScreen} />
+          </>
+        )}
 
-export default App;
+        {/* Modals & Full Screens */}
+        <Stack.Screen
+          name="AddExpense"
+          component={VoiceInput}
+          options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen name="SmsReader" component={SmsReaderScreen} />
+        <Stack.Screen name="Profile" component={ProfileScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
