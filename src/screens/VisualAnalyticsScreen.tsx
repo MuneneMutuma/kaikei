@@ -7,10 +7,14 @@ import { colors } from '../theme/colors';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ChevronLeft, ChevronRight, TrendingUp, X, ShoppingBag, Calendar, Eye, EyeOff } from 'lucide-react-native';
 import { getCategoryIcon, getCategoryColor } from './AnalyticsScreen';
+import { TransactionRow } from '../components/TransactionRow';
+import { TransactionDetailModal } from '../components/TransactionDetailModal';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const screenWidth = Dimensions.get('window').width;
 
 const VisualAnalyticsScreen = () => {
+    const insets = useSafeAreaInsets();
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -22,6 +26,9 @@ const VisualAnalyticsScreen = () => {
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedDayExpenses, setSelectedDayExpenses] = useState<{ date: string, items: Expense[] } | null>(null);
     const [showLegend, setShowLegend] = useState(true);
+
+    const [selectedTx, setSelectedTx] = useState<Expense | null>(null);
+    const [detailModalVisible, setDetailModalVisible] = useState(false);
 
     useEffect(() => {
         loadData();
@@ -134,7 +141,6 @@ const VisualAnalyticsScreen = () => {
 
         filteredExpenses.forEach(e => {
             const dateKey = e.date.split('T')[0];
-            // Check if dateKey matches our generated keys (handle potential timezone mismatches strictly by date string if needed)
             if (dailyTotals.hasOwnProperty(dateKey)) {
                 dailyTotals[dateKey] += e.amount;
                 dailyItems[dateKey].push(e);
@@ -233,7 +239,6 @@ const VisualAnalyticsScreen = () => {
                     <Text style={styles.summaryLabel}>Total Spent</Text>
                     <Text style={styles.summaryAmount}>KES {totalSpend.toLocaleString()}</Text>
                     <View style={styles.trendRow}>
-                        {/* Placeholder trend logic - can be refined to compare with prev month */}
                         <TrendingUp size={16} color={colors.danger} />
                         <Text style={styles.trendText}>Tracking {filteredExpenses.length} transactions</Text>
                     </View>
@@ -247,9 +252,9 @@ const VisualAnalyticsScreen = () => {
                         <PieChart
                             data={pieData}
                             donut
-                            showText={false} // Hide external text to avoid clutter
+                            showText={false}
                             radius={110}
-                            innerRadius={65} // Thicker chart
+                            innerRadius={65}
                             focusOnPress
                             sectionAutoFocus
                             centerLabelComponent={renderCenterLabel}
@@ -296,7 +301,7 @@ const VisualAnalyticsScreen = () => {
                     <Text style={styles.chartSubtitle}>Scroll to view full month • Tap bars for details</Text>
                     <View style={{ paddingVertical: 16 }}>
                         <BarChart
-                            key={selectedMonth.toISOString()} // Force re-render on month change
+                            key={selectedMonth.toISOString()}
                             data={barData}
                             barWidth={22}
                             spacing={14}
@@ -322,10 +327,11 @@ const VisualAnalyticsScreen = () => {
                 visible={modalVisible}
                 animationType="slide"
                 transparent={true}
+                statusBarTranslucent
                 onRequestClose={() => setModalVisible(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
+                    <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) + 10, backgroundColor: 'white' }]}>
                         <View style={styles.modalHeader}>
                             <View>
                                 <Text style={styles.modalTitle}>Daily Breakdown</Text>
@@ -345,25 +351,27 @@ const VisualAnalyticsScreen = () => {
                                     <Text style={{ color: '#64748b' }}>No expenses for this day.</Text>
                                 </View>
                             }
-                            renderItem={({ item }) => {
-                                const Icon = getCategoryIcon(item.categoryName);
-                                return (
-                                    <View style={styles.txRow}>
-                                        <View style={[styles.iconCircle, { backgroundColor: `${getCategoryColor(item.categoryName)}20` }]}>
-                                            <Icon size={20} color={getCategoryColor(item.categoryName)} />
-                                        </View>
-                                        <View style={{ flex: 1, marginLeft: 12 }}>
-                                            <Text style={styles.txTitle}>{item.description}</Text>
-                                            <Text style={styles.txMeta}>{item.categoryName || 'Uncategorized'} • {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-                                        </View>
-                                        <Text style={styles.txAmount}>- {item.amount.toLocaleString()}</Text>
-                                    </View>
-                                );
-                            }}
+                            renderItem={({ item }) => (
+                                <TransactionRow
+                                    item={item}
+                                    onPress={(item) => {
+                                        setSelectedTx(item);
+                                        setDetailModalVisible(true);
+                                    }}
+                                    showDate={false}
+                                />
+                            )}
                         />
                     </View>
                 </View>
             </Modal>
+
+            <TransactionDetailModal
+                visible={detailModalVisible}
+                transaction={selectedTx}
+                onClose={() => setDetailModalVisible(false)}
+                onUpdate={loadData}
+            />
         </View>
     );
 };
@@ -413,7 +421,7 @@ const styles = StyleSheet.create({
 
     // Modal
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '70%', paddingBottom: 20 },
+    modalContent: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
     modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#0d1b12' },
     modalSubtitle: { fontSize: 14, color: '#64748b', marginTop: 4 },

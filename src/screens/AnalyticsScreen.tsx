@@ -4,6 +4,8 @@ import {
 } from "react-native";
 import { colors } from "../theme/colors";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { TransactionRow } from "../components/TransactionRow";
+import { TransactionDetailModal } from "../components/TransactionDetailModal";
 import {
     Search,
     Filter,
@@ -26,6 +28,7 @@ import {
 } from "lucide-react-native";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { Expense } from "../services/ledger/Schema";
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from "@react-navigation/native";
 
 // Helper to get relative date label
@@ -64,6 +67,7 @@ export const getCategoryColor = (name?: string | null) => {
 };
 
 const AnalyticsScreen = ({ navigation }: any) => {
+    const tabBarHeight = useBottomTabBarHeight();
     const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'review'>('all');
     const [segment, setSegment] = useState<'business' | 'personal'>('business');
     const [searchQuery, setSearchQuery] = useState("");
@@ -212,70 +216,25 @@ const AnalyticsScreen = ({ navigation }: any) => {
         </View >
     );
 
+    const [selectedTx, setSelectedTx] = useState<Expense | null>(null);
+    const [detailModalVisible, setDetailModalVisible] = useState(false);
+
+    const handleTransactionPress = (item: Expense) => {
+        setSelectedTx(item);
+        setDetailModalVisible(true);
+    };
+
+    const handleTransactionUpdate = async () => {
+        await loadData();
+    };
+
     const renderTransactionResponse = ({ item }: { item: Expense }) => {
-        const Icon = getCategoryIcon(item.categoryName);
-        const color = getCategoryColor(item.categoryName);
-        const time = new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        // Mock Confidence Logic
-        const confidence = item.source === 'manual' ? 100 : item.source === 'mpesa' ? 95 : 80;
-        const confidenceColor = confidence > 90 ? colors.primary : confidence > 70 ? '#F59E0B' : '#EF4444';
-        const heightPercent = `${confidence}%`;
-
         return (
-            <TouchableOpacity style={styles.card} activeOpacity={0.7}>
-                <View style={styles.cardRow}>
-                    {/* Icon */}
-                    <View style={[styles.iconCircle, { backgroundColor: `${color}20` }]}>
-                        <Icon size={24} color={color} />
-                    </View>
-
-                    {/* Content */}
-                    <View style={styles.cardContent}>
-                        <View style={styles.rowBetween}>
-                            <Text style={styles.cardTitle} numberOfLines={1}>{item.description}</Text>
-                            <Text style={styles.cardAmount}>
-                                {item.type === 'expense' ? '- ' : '+ '}
-                                {item.amount.toLocaleString()}
-                            </Text>
-                        </View>
-
-                        <View style={styles.rowBetween}>
-                            <View style={styles.metaRow}>
-                                <Text style={styles.metaText}>{time}</Text>
-                                <View style={styles.dot} />
-                                {item.source === 'mpesa' ? (
-                                    <View style={styles.sourceTag}>
-                                        <Text style={styles.sourceText}>M-Pesa</Text>
-                                    </View>
-                                ) : (
-                                    <View style={styles.micTag}>
-                                        <Mic size={10} color={colors.primaryDark} />
-                                        <Text style={styles.micText}>Voice</Text>
-                                    </View>
-                                )}
-                            </View>
-
-                            {/* Confidence Indicator Pill on Right */}
-                        </View>
-
-                        {/* Badges if Review Needed */}
-                        {!item.isVerified && (
-                            <View style={styles.badgeRow}>
-                                <View style={styles.reviewBadge}>
-                                    <Edit3 size={10} color="#92400E" />
-                                    <Text style={styles.reviewText}>Review</Text>
-                                </View>
-                            </View>
-                        )}
-                    </View>
-
-                    {/* Confidence Strip */}
-                    <View style={styles.confidenceStrip}>
-                        <View style={[styles.confidenceFill, { height: heightPercent as any, backgroundColor: confidenceColor }]} />
-                    </View>
-                </View>
-            </TouchableOpacity>
+            <TransactionRow
+                item={item}
+                onPress={handleTransactionPress}
+                showDate={false}
+            />
         );
     };
 
@@ -310,13 +269,20 @@ const AnalyticsScreen = ({ navigation }: any) => {
 
             {/* FAB */}
             <TouchableOpacity
-                style={styles.fab}
+                style={[styles.fab, { bottom: 20 }]} // Fixed offset from bottom of container (above tab bar)
                 onPress={() => navigation.navigate('AddManual')}
                 activeOpacity={0.8}
             >
                 <Plus size={32} color="#0d1b12" />
             </TouchableOpacity>
-        </View>
+
+            <TransactionDetailModal
+                visible={detailModalVisible}
+                transaction={selectedTx}
+                onClose={() => setDetailModalVisible(false)}
+                onUpdate={handleTransactionUpdate}
+            />
+        </View >
     );
 };
 
@@ -559,7 +525,7 @@ const styles = StyleSheet.create({
     },
     fab: {
         position: 'absolute',
-        bottom: 110, // Above tab bar
+        bottom: 80, // Above tab bar
         right: 20,
         width: 60,
         height: 60,

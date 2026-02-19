@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text, StyleSheet, Platform, PermissionsAndroid, Linking, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SettingsRepository } from './src/services/settings/SettingsRepository';
 import { IngestionService } from './src/services/ingestion/IngestionService';
 import { AutoClassifier } from './src/services/intelligence/AutoClassifier';
@@ -46,6 +47,8 @@ export type MainTabParamList = {
 };
 
 function MainTabs() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -55,8 +58,8 @@ function MainTabs() {
           backgroundColor: 'white', // card-light
           borderTopWidth: 1,
           borderTopColor: '#f1f5f9',
-          height: 70,
-          paddingBottom: 10,
+          height: 70 + (insets.bottom > 0 ? insets.bottom : 20), // Increased base height & fallback
+          paddingBottom: (insets.bottom > 0 ? insets.bottom : 20), // Added more breathing room
           paddingTop: 10,
         },
         tabBarActiveTintColor: colors.primaryDark,
