@@ -3,6 +3,7 @@ import {
     View, Text, StyleSheet, SectionList, TouchableOpacity, TextInput, ActivityIndicator, StatusBar, Image
 } from "react-native";
 import { colors } from "../theme/colors";
+import { ScreenHeader } from "../components/ScreenHeader";
 import {
     Search,
     Filter,
@@ -134,17 +135,14 @@ const AnalyticsScreen = ({ navigation }: any) => {
     }, [expenses, searchQuery, filterType]);
 
     const renderHeader = () => (
-        <View style={styles.headerContainer}>
-            {/* Top Bar */}
-            <View style={styles.topBar}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
-                    <ArrowLeft size={24} color={colors.textSecondary} />
-                </TouchableOpacity>
-                <Text style={styles.screenTitle}>Transaction Ledger</Text>
-                <TouchableOpacity style={styles.iconBtn}>
-                    <SlidersHorizontal size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-            </View>
+        <View style={{ backgroundColor: colors.background, paddingBottom: 10 }}>
+            <ScreenHeader
+                title="Transaction Ledger"
+                subtitle="All History"
+                actionIcon={<SlidersHorizontal size={20} color={colors.text} />}
+                onActionPress={() => { }}
+                showNotification={false}
+            />
 
             {/* Search Bar */}
             <View style={styles.searchContainer}>
@@ -211,7 +209,7 @@ const AnalyticsScreen = ({ navigation }: any) => {
                     <Text style={[styles.filterText, { color: '#C2410C' }]}>Review</Text>
                 </TouchableOpacity>
             </View>
-        </View>
+        </View >
     );
 
     const renderTransactionResponse = ({ item }: { item: Expense }) => {

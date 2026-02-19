@@ -16,6 +16,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import SmsAndroid from "react-native-get-sms-android";
+import { ScreenHeader } from "../components/ScreenHeader";
+import { DownloadCloud } from "lucide-react-native";
 import { parseMpesaMessage, MpesaTransaction } from "../utils/mpesaParser";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
@@ -330,18 +332,13 @@ export default function SMSReaderScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Imports</Text>
-          <Text style={{ fontSize: 12, color: '#666' }}>{transactions.length} messages found</Text>
-        </View>
-        <TouchableOpacity
-          style={[styles.checkbox, { width: 'auto', paddingHorizontal: 10, borderColor: colors.primary, borderWidth: 1 }]}
-          onPress={handleSelectAll}
-        >
-          <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Import All</Text>
-        </TouchableOpacity>
-      </View>
+      <ScreenHeader
+        title="Imports"
+        subtitle={`${transactions.length} messages found`}
+        actionIcon={<DownloadCloud size={24} color={colors.primary} />}
+        onActionPress={handleSelectAll}
+        showNotification={false}
+      />
 
       <FlatList
         // ... same ...

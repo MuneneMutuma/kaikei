@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar } from 'react-native';
 import { colors } from '../theme/colors';
+import { ScreenHeader } from '../components/ScreenHeader';
 import { Bell, Zap, Cloud, Fuel, ArrowRight, CheckCircle, ShoppingBasket, CreditCard } from 'lucide-react-native';
 
 const AdviceScreen = () => {
@@ -9,12 +10,12 @@ const AdviceScreen = () => {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
-                <Text style={styles.title}>Smart Advice</Text>
-                <TouchableOpacity style={styles.notifBtn}>
-                    <Bell size={20} color="#15803d" />
-                </TouchableOpacity>
-            </View>
+            <ScreenHeader
+                title="Smart Advice"
+                subtitle="Financial Insights"
+                actionIcon={<Bell size={24} color="#15803d" />}
+                showNotification={false} // Using custom action icon
+            />
 
             {/* Toggle */}
             <View style={styles.toggleContainer}>
