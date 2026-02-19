@@ -56,6 +56,25 @@ export class ExpenseRepository {
     }
 
     /**
+     * Get All Expenses (for Visual Analytics)
+     */
+    public async getAllExpenses(): Promise<Expense[]> {
+        const result = await this.db.execute(
+            `SELECT e.*, c.name as categoryName 
+           FROM expenses e 
+           LEFT JOIN categories c ON e.categoryId = c.id
+           WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+           ORDER BY e.date DESC`
+        );
+
+        return Database.getRows(result).map(row => ({
+            ...row,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            type: row.type || 'expense'
+        })) as Expense[];
+    }
+
+    /**
      * Get all expenses for a specific month
      * @param monthStr "YYYY-MM"
      */

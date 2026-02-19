@@ -17,10 +17,12 @@ import SmsReaderScreen from './src/screens/SmsReaderScreen'; // Legacy for debug
 import VoiceInput from './src/screens/VoiceInput';
 import AdviceScreen from './src/screens/AdviceScreen';
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
+import VisualAnalyticsScreen from './src/screens/VisualAnalyticsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import AddManualExpenseScreen from './src/screens/AddManualExpenseScreen';
 
 // Icons
-import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus } from 'lucide-react-native';
+import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart } from 'lucide-react-native';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -30,47 +32,18 @@ export type RootStackParamList = {
   Setup: { name: string; persona: string };
   MainTabs: undefined;
   SmsReader: undefined;
-  AddExpense: undefined; // Generic add expense (voice/manual)
+  AddExpense: undefined; // Voice Input
+  AddManual: undefined; // Manual Entry
   SmartSuggestion: { name: string, count: number };
   Profile: undefined;
 };
 
 export type MainTabParamList = {
   Home: undefined;
-  Ledger: undefined;
-  Voice: undefined; // Placeholder for FAB
-  Advice: undefined;
-  Profile: undefined;
+  Analytics: undefined; // Graphs
+  Wallet: undefined;
+  Reports: undefined;
 };
-
-// Custom FAB Component for the center button
-const VoiceFabButton = ({ onPress }: { onPress: () => void }) => (
-  <TouchableOpacity
-    style={{
-      top: -24,
-      justifyContent: 'center',
-      alignItems: 'center',
-      shadowColor: colors.primary,
-      shadowOpacity: 0.3,
-      shadowRadius: 10,
-      elevation: 8,
-    }}
-    onPress={onPress}
-  >
-    <View style={{
-      width: 64,
-      height: 64,
-      borderRadius: 32,
-      backgroundColor: colors.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 4,
-      borderColor: colors.background,
-    }}>
-      <Mic size={32} color="#0d1b12" />
-    </View>
-  </TouchableOpacity>
-);
 
 function MainTabs() {
   return (
@@ -79,12 +52,7 @@ function MainTabs() {
         headerShown: false,
         tabBarShowLabel: true,
         tabBarStyle: {
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          elevation: 0,
-          backgroundColor: 'white',
+          backgroundColor: 'white', // card-light
           borderTopWidth: 1,
           borderTopColor: '#f1f5f9',
           height: 70,
@@ -101,51 +69,51 @@ function MainTabs() {
         component={HomeScreen}
         options={{
           tabBarLabel: 'Home',
-          tabBarIcon: ({ color, size }) => <LayoutDashboard size={24} color={color} />
-        }}
-      />
-      <Tab.Screen
-        name="Ledger"
-        component={AnalyticsScreen} // Analytics is now the Ledger
-        options={{
-          tabBarLabel: 'Ledger',
-          tabBarIcon: ({ color, size }) => <Wallet size={24} color={color} />
+          tabBarIcon: ({ color }) => <LayoutDashboard size={24} color={color} />
         }}
       />
 
-      {/* Center Voice Button */}
+      {/* Analytics (Graphs) - Replaces Trips */}
       <Tab.Screen
-        name="Voice"
-        component={VoiceViewPlaceholder} // Dummy component
-        options={({ navigation }) => ({
-          tabBarButton: (props) => (
-            <VoiceFabButton onPress={() => (navigation as any).navigate('AddExpense')} />
-          ),
-          tabBarLabel: '',
-        })}
+        name="Analytics"
+        component={VisualAnalyticsScreen}
+        options={{
+          tabBarLabel: 'Analytics',
+          tabBarIcon: ({ color }) => <PieChart size={24} color={color} />
+        }}
       />
 
       <Tab.Screen
-        name="Advice"
-        component={AdviceScreen}
+        name="Wallet"
+        component={AnalyticsScreen} // Mapped to Ledger/Analytics
         options={{
-          tabBarLabel: 'Advice',
-          tabBarIcon: ({ color, size }) => <Lightbulb size={24} color={color} />
+          tabBarLabel: 'Wallet',
+          tabBarIcon: ({ color }) => <Wallet size={24} color={color} />
         }}
       />
+
       <Tab.Screen
-        name="Profile"
-        component={ProfileScreen}
+        name="Reports"
+        component={AdviceScreen} // Mapped to Advice/Insights
         options={{
-          tabBarLabel: 'Profile',
-          tabBarIcon: ({ color, size }) => <User size={24} color={color} />
+          tabBarLabel: 'Reports',
+          tabBarIcon: ({ color }) => <BarChart3 size={24} color={color} />
         }}
       />
     </Tab.Navigator>
   );
 }
 
-const VoiceViewPlaceholder = () => <View style={{ flex: 1, backgroundColor: colors.background }} />;
+
+
+
+const TripsPlaceholder = () => (
+  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+    <Bike size={48} color={colors.primary} />
+    <Text style={{ marginTop: 16, fontSize: 18, fontWeight: 'bold', color: colors.text }}>Trips Coming Soon</Text>
+    <Text style={{ marginTop: 8, color: '#64748b' }}>Track your rides and mileage here.</Text>
+  </View>
+);
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
@@ -235,6 +203,11 @@ export default function App() {
         <Stack.Screen
           name="AddExpense"
           component={VoiceInput}
+          options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="AddManual"
+          component={AddManualExpenseScreen}
           options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
         />
         <Stack.Screen name="SmsReader" component={SmsReaderScreen} />
