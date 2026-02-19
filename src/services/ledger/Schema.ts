@@ -22,6 +22,7 @@ export interface Expense {
     type: 'income' | 'expense' | 'transfer';
     sender?: string;
     recipient?: string;
+    account?: string; // e.g. M-Shwari, Pochi, KCB
 }
 
 export const DEFAULT_CATEGORIES: Omit<Category, 'id'>[] = [

@@ -9,14 +9,15 @@ export class ExpenseRepository {
     /**
      * Add a new expense
      */
-    public async addExpense(expense: Omit<Expense, 'id' | 'isVerified' | 'synced'>): Promise<Expense> {
+    public async addExpense(expense: Omit<Expense, 'id' | 'synced'> | Omit<Expense, 'id' | 'synced' | 'isVerified'>): Promise<Expense> {
         const id = uuidv4();
+        const isVerified = 'isVerified' in expense ? expense.isVerified : false;
 
         // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
         const result = await this.db.execute(
             `INSERT OR IGNORE INTO expenses (
-                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 id,
                 expense.amount,
@@ -29,7 +30,9 @@ export class ExpenseRepository {
                 expense.excludeFromAnalytics ? 1 : 0,
                 expense.type || 'expense',
                 expense.sender || null,
-                expense.recipient || null
+                expense.recipient || null,
+                isVerified ? 1 : 0,
+                0
             ]
         );
 
@@ -41,14 +44,18 @@ export class ExpenseRepository {
 
         const newExpense: Expense = {
             id,
-            ...expense,
+            amount: expense.amount,
+            date: expense.date,
+            description: expense.description,
+            categoryId: expense.categoryId,
+            source: expense.source,
             rawText: expense.rawText || undefined,
             transactionId: expense.transactionId || undefined,
             excludeFromAnalytics: expense.excludeFromAnalytics || false,
             type: expense.type || 'expense',
             sender: expense.sender || undefined,
             recipient: expense.recipient || undefined,
-            isVerified: false,
+            isVerified,
             synced: false
         };
 

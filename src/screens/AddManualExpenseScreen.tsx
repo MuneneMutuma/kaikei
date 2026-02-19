@@ -78,7 +78,8 @@ const AddManualExpenseScreen: React.FC = () => {
                 categoryId: selectedCategory.id,
                 source: 'manual',
                 rawText: '',
-                type: 'expense'
+                type: 'expense',
+                isVerified: true
             });
             navigation.goBack();
         } catch (e) {

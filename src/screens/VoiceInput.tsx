@@ -178,7 +178,8 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                 categoryId: parsedData.categoryId || 'other', // Fallback
                 source: 'voice',
                 rawText: transcript,
-                type: 'expense'
+                type: 'expense',
+                isVerified: true
             });
             navigation.goBack();
         } catch (e) {
