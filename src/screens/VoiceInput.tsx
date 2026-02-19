@@ -1,60 +1,198 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Modal
+    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Modal, Alert, NativeModules, NativeEventEmitter, Platform, PermissionsAndroid
 } from "react-native";
 import { X, Mic, Check, RotateCcw, Settings, Globe } from 'lucide-react-native';
 import { colors } from "../theme/colors";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../App";
 
-// Mock Native Module for now as we focus on UI
-// In real app, this connects to the VoiceModule we saw earlier
-const VoiceModule = {
-    startListening: () => { },
-    stopListening: () => { },
-};
+import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
+import { Category } from "../services/ledger/Schema";
+import { getCategoryColor, getCategoryIcon } from "./CategoryStep"; // Reuse helpers
 
-type Props = NativeStackScreenProps<RootStackParamList, 'AddExpense'>; // Using AddExpense route for now
+// --- NATIVE VOICE ENGINE ---
+const { VoiceModule } = NativeModules;
+const voiceEmitter = new NativeEventEmitter(VoiceModule);
+
+type Props = NativeStackScreenProps<RootStackParamList, 'AddExpense'>;
 
 const VoiceInput: React.FC<Props> = ({ navigation }) => {
+    const parser = useRef(new NaturalLanguageParser());
+    const repo = useRef(new ExpenseRepository());
+
+    // State
     const [isListening, setIsListening] = useState(false);
     const [transcript, setTranscript] = useState("");
     const [parsedData, setParsedData] = useState<any>(null);
     const [confidence, setConfidence] = useState(0);
+    const [voiceProcessing, setVoiceProcessing] = useState(false);
+    const [saving, setSaving] = useState(false);
 
-    // Simulated "Live" Transcription
-    const startSimulation = () => {
-        setIsListening(true);
-        setTranscript("");
-        setParsedData(null);
-
-        setTimeout(() => setTranscript("Nimetumia..."), 1000);
-        setTimeout(() => setTranscript("Nimetumia mia mbili..."), 2000);
-        setTimeout(() => setTranscript("Nimetumia mia mbili kwa chakula"), 3000);
-        setTimeout(() => {
-            setIsListening(false);
-            setParsedData({
-                amount: 200,
-                category: "Food & Dining",
-                categoryLocal: "Chakula",
-                image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDAuShzqrIRst30mOVTEDjx5RIVQlbWdDlLxc93HgHbbiNmyCrEdnmdo9sGQY-2nuF2Wj9T3WA3kwhU33NKpEWNJ1rbXC5x35teLAd7mmddhq4_dwlEjG4YEUkkfR013r9WEXqJODpQ3bhR-ieYxurUg-RtM7KuwdMIfVeHiUr_-NZPt_maLqKCCRJtebLDJrcAk5s2Xm4w0L_ZFlG4xzLVNYnq9kE-vw2_kr1R711giaFO5CG3yjdcqJrRZEr6HkAOaJBCK_JUb36y"
-            });
-            setConfidence(98);
-        }, 3500);
-    };
+    const [dbCategories, setDbCategories] = useState<Category[]>([]);
+    const categoriesRef = useRef<Category[]>([]);
 
     useEffect(() => {
-        // Auto-start for demo feel
-        startSimulation();
+        const loadData = async () => {
+            try {
+                const cats = await repo.current.getAllCategories();
+                setDbCategories(cats);
+                categoriesRef.current = cats;
+            } catch (e) {
+                console.error("Load Categories Error", e);
+            }
+        };
+        loadData();
+
+        // Voice Listeners
+        const onSpeechStart = () => setIsListening(true);
+        const onSpeechResults = (e: any) => {
+            if (e.value && e.value[0]) {
+                handleVoiceInput(e.value[0]);
+            }
+        };
+        const onSpeechError = (e: any) => {
+            console.log("Voice Error:", e);
+            setIsListening(false);
+            if (e.code === 7 || e.code === 13) {
+                Alert.alert("Voice Ready", "Offline speech engine is starting or needs its language pack.");
+            }
+        };
+
+        const startListener = voiceEmitter.addListener('onSpeechStart', onSpeechStart);
+        const resultListener = voiceEmitter.addListener('onSpeechResults', onSpeechResults);
+        const errorListener = voiceEmitter.addListener('onSpeechError', onSpeechError);
+
+        // Auto-start listening on mount
+        startListeningSession();
+
+        return () => {
+            startListener.remove();
+            resultListener.remove();
+            errorListener.remove();
+            stopListeningSession();
+        };
     }, []);
 
-    const handleConfirm = () => {
-        // Save logic here
-        navigation.goBack();
+    const requestMicrophonePermission = async () => {
+        if (Platform.OS === 'android') {
+            try {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+                    {
+                        title: "Microphone Permission",
+                        message: "Kaikei needs access to your microphone so you can add expenses with your voice.",
+                        buttonNeutral: "Ask Me Later",
+                        buttonNegative: "Cancel",
+                        buttonPositive: "OK",
+                    }
+                );
+                return granted === PermissionsAndroid.RESULTS.GRANTED;
+            } catch (err) {
+                console.warn(err);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const startListeningSession = async () => {
+        if (!VoiceModule) {
+            Alert.alert("Voice Error", "Native voice module not found.");
+            return;
+        }
+        const hasPermission = await requestMicrophonePermission();
+        if (!hasPermission) {
+            Alert.alert("Permission Denied", "Microphone access is required.");
+            return;
+        }
+
+        try {
+            await VoiceModule.startListening({
+                locale: '', // Use system default (often Swahili/English mixed here)
+                preferOffline: true
+            });
+            setIsListening(true);
+        } catch (e) {
+            console.error("Voice Start Error", e);
+            // Alert.alert("Speech Input Error", "Could not start recording.");
+        }
+    };
+
+    const stopListeningSession = async () => {
+        if (isListening) {
+            try {
+                await VoiceModule.stopListening();
+                setIsListening(false);
+            } catch (e) {
+                console.error("Voice Stop Error", e);
+            }
+        }
+    };
+
+    const handleVoiceInput = async (text: string) => {
+        setIsListening(false);
+        setVoiceProcessing(true);
+        setTranscript(text);
+
+        try {
+            const result = await parser.current.parse(text);
+
+            if (result && result.amount > 0) {
+                const currentCats = categoriesRef.current;
+                const cat = currentCats.find(c => c.name.toLowerCase() === result.categoryName?.toLowerCase())
+                    || currentCats.find(c => c.id === result.categoryId)
+                    || currentCats.find(c => c.name.toLowerCase() === 'other');
+
+                // Construct Display Data
+                setParsedData({
+                    amount: result.amount,
+                    category: cat?.name || "Unknown",
+                    categoryId: cat?.id,
+                    description: result.description || cat?.name || "Voice Entry",
+                    categoryLocal: cat?.name, // Ideally we would have a local name field
+                    image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDAuShzqrIRst30mOVTEDjx5RIVQlbWdDlLxc93HgHbbiNmyCrEdnmdo9sGQY-2nuF2Wj9T3WA3kwhU33NKpEWNJ1rbXC5x35teLAd7mmddhq4_dwlEjG4YEUkkfR013r9WEXqJODpQ3bhR-ieYxurUg-RtM7KuwdMIfVeHiUr_-NZPt_maLqKCCRJtebLDJrcAk5s2Xm4w0L_ZFlG4xzLVNYnq9kE-vw2_kr1R711giaFO5CG3yjdcqJrRZEr6HkAOaJBCK_JUb36y" // Placeholder
+                });
+                setConfidence(85 + Math.floor(Math.random() * 15)); // Mock confidence for now as parser doesn't return it yet
+            } else {
+                setTranscript(text + " (Could not understand amount)");
+            }
+        } catch (e) {
+            console.error(e);
+            setTranscript("Error parsing voice input.");
+        } finally {
+            setVoiceProcessing(false);
+        }
+    };
+
+    const handleConfirm = async () => {
+        if (!parsedData) return;
+        setSaving(true);
+        try {
+            const date = new Date().toISOString();
+            await repo.current.addExpense({
+                amount: parsedData.amount,
+                date: date,
+                description: parsedData.description,
+                categoryId: parsedData.categoryId || 'other', // Fallback
+                source: 'voice',
+                rawText: transcript,
+                type: 'expense'
+            });
+            navigation.goBack();
+        } catch (e) {
+            console.error("Failed to save", e);
+            Alert.alert("Error", "Could not save expense.");
+        } finally {
+            setSaving(false);
+        }
     };
 
     const handleRetry = () => {
-        startSimulation();
+        setParsedData(null);
+        setTranscript("");
+        startListeningSession();
     };
 
     return (
@@ -67,7 +205,7 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
 
                 <View style={{ alignItems: 'center' }}>
                     <Text style={[styles.statusText, isListening && styles.statusPulse]}>
-                        {isListening ? "LISTENING..." : "DONE"}
+                        {isListening ? "LISTENING..." : voiceProcessing ? "PROCESSING..." : "DONE"}
                     </Text>
                     <Text style={styles.subStatus}>Inasikiza...</Text>
                 </View>
@@ -92,7 +230,7 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                     {transcript ? `"${transcript}"` : "..."}
                 </Text>
                 <Text style={styles.translation}>
-                    {parsedData ? `Spent ${parsedData.amount} on food` : "Speak clearly in Swahili or English"}
+                    {parsedData ? `Spent ${parsedData.amount} on ${parsedData.category}` : "Speak clearly in Swahili or English"}
                 </Text>
             </View>
 
@@ -115,15 +253,15 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                             <Text style={styles.amountValue}>KES {parsedData.amount}</Text>
 
                             <View style={styles.catRow}>
-                                <View style={styles.dot} />
-                                <Text style={styles.catText}>{parsedData.category}</Text>
+                                <View style={[styles.dot, { backgroundColor: getCategoryColor(parsedData.category) }]} />
+                                <Text style={[styles.catText, { color: getCategoryColor(parsedData.category) }]}>{parsedData.category}</Text>
                             </View>
                         </View>
 
                         <View style={styles.catImageContainer}>
                             <Image source={{ uri: parsedData.image }} style={styles.catImage} />
                             <View style={styles.catOverlay}>
-                                <Text style={styles.catOverlayText}>{parsedData.categoryLocal}</Text>
+                                <Text style={styles.catOverlayText}>{parsedData.categoryLocal || parsedData.category}</Text>
                             </View>
                         </View>
                     </View>
@@ -134,13 +272,23 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
             <View style={styles.footer}>
                 <View style={styles.actionRow}>
                     <TouchableOpacity style={styles.cancelBtn} onPress={handleRetry}>
-                        <X size={24} color="#475569" />
-                        <Text style={styles.cancelText}>Ghairi</Text>
+                        <RotateCcw size={24} color="#475569" />
+                        <Text style={styles.cancelText}>Retry</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirm}>
-                        <Check size={24} color="#0d1b12" />
-                        <Text style={styles.confirmText}>Thibitisha</Text>
+                    <TouchableOpacity
+                        style={[styles.confirmBtn, !parsedData && { backgroundColor: '#e2e8f0', shadowOpacity: 0 }]}
+                        onPress={handleConfirm}
+                        disabled={!parsedData || saving}
+                    >
+                        {saving ? (
+                            <ActivityIndicator color="#0d1b12" />
+                        ) : (
+                            <>
+                                <Check size={24} color={!parsedData ? "#94a3b8" : "#0d1b12"} />
+                                <Text style={[styles.confirmText, !parsedData && { color: "#94a3b8" }]}>Thibitisha</Text>
+                            </>
+                        )}
                     </TouchableOpacity>
                 </View>
                 <Text style={styles.footerHint}>Tap confirm to add to M-Pesa ledger</Text>
@@ -165,7 +313,7 @@ const styles = StyleSheet.create({
     ripple: { position: 'absolute', width: 200, height: 200, borderRadius: 100, backgroundColor: 'rgba(19, 236, 91, 0.1)' },
 
     transcriptArea: { paddingHorizontal: 32, alignItems: 'center', gap: 8 },
-    transcriptText: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', color: '#0d1b12' },
+    transcriptText: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', color: '#0d1b12' },
     translation: { fontSize: 16, textAlign: 'center', color: '#64748b', fontStyle: 'italic' },
 
     card: { marginHorizontal: 24, padding: 20, backgroundColor: 'white', borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 4 },

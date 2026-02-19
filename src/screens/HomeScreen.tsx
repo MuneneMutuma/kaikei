@@ -140,7 +140,7 @@ export default function HomeScreen({ navigation }: any) {
         </View>
 
         {/* Smart Insight Card */}
-        <TouchableOpacity style={styles.insightCard} onPress={() => navigation.navigate('Advice')}>
+        <TouchableOpacity style={styles.insightCard} onPress={() => navigation.navigate('Reports')}>
           <View style={styles.insightIcon}>
             <Lightbulb size={24} color="#ea580c" />
           </View>
@@ -159,7 +159,7 @@ export default function HomeScreen({ navigation }: any) {
           <TouchableOpacity
             style={styles.micButtonWrapper}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate('SmsReader')} // Reusing VoiceInput but naming in file is 'SmsReader'?? Wait, plan says VoiceInput.tsx. Let's send to VoiceInput stack or modal. 
+            onPress={() => navigation.navigate('AddExpense')} // 'AddExpense' is the VoiceInput screen 
           // Wait, Navigation flow in App.tsx shows 'SmsReader' as a screen, but we want VoiceInput screen.
           // The VoiceInput component is likely embedded or a screen. 
           // Looking at App.tsx, we have a VoiceInput screen or similar? 
@@ -185,7 +185,7 @@ export default function HomeScreen({ navigation }: any) {
 
           {/* Secondary Buttons */}
           <View style={styles.secondaryActions}>
-            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('AddExpense')}>
+            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('AddManual')}>
               <Plus size={24} color="#0d1b12" />
               <Text style={styles.actionButtonText}>Add Cash</Text>
             </TouchableOpacity>
@@ -215,7 +215,7 @@ const styles = StyleSheet.create({
   syncBadge: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: 'rgba(19, 236, 91, 0.1)', borderWidth: 1, borderColor: 'rgba(19, 236, 91, 0.2)' },
   syncText: { fontSize: 12, fontWeight: '500', color: '#334155' },
 
-  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 24 },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 100 },
 
   grid: { flexDirection: 'row', gap: 16, marginBottom: 16 },
   statCard: { flex: 1, backgroundColor: 'white', borderRadius: 16, padding: 20, height: 160, justifyContent: 'space-between', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, overflow: 'hidden', position: 'relative' },

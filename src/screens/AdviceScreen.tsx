@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
     toggleTextActive: { color: '#0d1b12', fontWeight: '600' },
     toggleHint: { textAlign: 'center', fontSize: 12, color: '#94a3b8', marginTop: 12 },
 
-    scrollContent: { paddingHorizontal: 20, gap: 24, paddingBottom: 40 },
+    scrollContent: { paddingHorizontal: 20, gap: 24, paddingBottom: 100 },
 
     card: { backgroundColor: 'white', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#f1f5f9', shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 8, elevation: 1 },
     highPriorityCard: {},
