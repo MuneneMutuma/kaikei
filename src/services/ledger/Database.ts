@@ -86,6 +86,7 @@ export class Database {
           recipient TEXT,
           isVerified BOOLEAN DEFAULT 0,
           synced BOOLEAN DEFAULT 0,
+          isBusiness BOOLEAN DEFAULT 0,
           FOREIGN KEY(categoryId) REFERENCES categories(id)
         );
       `);
@@ -103,6 +104,7 @@ export class Database {
           db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)');
           db.execute('CREATE INDEX IF NOT EXISTS idx_unverified_raw ON expenses(id) WHERE isVerified = 0 AND rawText IS NOT NULL');
           db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_transactionId ON expenses(transactionId)');
+          db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_is_business ON expenses(isBusiness)');
         } catch (e) {
           // ignore
         }
@@ -139,6 +141,13 @@ export class Database {
           if (!existingColumns.has('synced')) {
             try {
               db.execute('ALTER TABLE expenses ADD COLUMN synced BOOLEAN DEFAULT 0');
+            } catch (e) { /* ignore duplicate column error */ }
+          }
+
+          if (!existingColumns.has('isBusiness')) {
+            try {
+              db.execute('ALTER TABLE expenses ADD COLUMN isBusiness BOOLEAN DEFAULT 0');
+              console.log("Migrated: Added isBusiness column");
             } catch (e) { /* ignore duplicate column error */ }
           }
         } catch (e) {

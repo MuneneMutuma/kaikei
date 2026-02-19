@@ -66,10 +66,41 @@ export const getCategoryColor = (name?: string | null) => {
     return "#64748B"; // Default gray
 };
 
+import { LucideIcon } from 'lucide-react-native';
+
+interface FilterChipProps {
+    label: string;
+    icon: LucideIcon;
+    isActive: boolean;
+    activeColor: string;
+    defaultColor?: string;
+    onPress: () => void;
+}
+
+const FilterChip: React.FC<FilterChipProps> = ({ label, icon: Icon, isActive, activeColor, defaultColor = colors.text, onPress }) => {
+    return (
+        <TouchableOpacity
+            style={[
+                styles.filterChip,
+                // Simple background switch, exactly like the 'All' pill
+                isActive ? { backgroundColor: activeColor } : { backgroundColor: '#FFF' }
+            ]}
+            onPress={onPress}
+            activeOpacity={0.8}
+        >
+            <Icon size={16} color={isActive ? '#FFF' : defaultColor} />
+            <Text style={[
+                styles.filterText,
+                isActive ? { color: '#FFF' } : { color: defaultColor }
+            ]}>{label}</Text>
+        </TouchableOpacity>
+    );
+};
+
 const AnalyticsScreen = ({ navigation }: any) => {
     const tabBarHeight = useBottomTabBarHeight();
     const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'review'>('all');
-    const [segment, setSegment] = useState<'business' | 'personal'>('business');
+    const [segment, setSegment] = useState<'all' | 'business' | 'personal'>('all');
     const [searchQuery, setSearchQuery] = useState("");
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [loading, setLoading] = useState(false);
@@ -103,14 +134,18 @@ const AnalyticsScreen = ({ navigation }: any) => {
     // Filtering & Grouping
     const sections = useMemo(() => {
         let filtered = expenses.filter(e => {
-            // Search
+            // 1. Segment Filter (Business vs Personal)
+            if (segment === 'business' && !e.isBusiness) return false;
+            if (segment === 'personal' && e.isBusiness) return false;
+
+            // 2. Search
             const q = searchQuery.toLowerCase();
             const matchesSearch = e.description.toLowerCase().includes(q) ||
                 (e.categoryName || '').toLowerCase().includes(q) ||
                 e.amount.toString().includes(q);
             if (!matchesSearch) return false;
 
-            // Filter Tabs
+            // 3. Type Filter (Income/Expense/Review)
             if (filterType === 'all') return true;
             if (filterType === 'review') return !e.isVerified; // Assuming review = unverified
             return e.type === filterType;
@@ -136,15 +171,13 @@ const AnalyticsScreen = ({ navigation }: any) => {
         }));
 
         return result;
-    }, [expenses, searchQuery, filterType]);
+    }, [expenses, searchQuery, filterType, segment]);
 
     const renderHeader = () => (
         <View style={{ backgroundColor: colors.background, paddingBottom: 10 }}>
             <ScreenHeader
                 title="Transaction Ledger"
                 subtitle="All History"
-                actionIcon={<SlidersHorizontal size={20} color={colors.text} />}
-                onActionPress={() => { }}
                 showNotification={false}
             />
 
@@ -158,18 +191,15 @@ const AnalyticsScreen = ({ navigation }: any) => {
                     value={searchQuery}
                     onChangeText={setSearchQuery}
                 />
-                <TouchableOpacity style={styles.micBtn}>
-                    <Mic size={18} color={colors.primaryDark} />
-                </TouchableOpacity>
             </View>
 
             {/* Segment Control */}
             <View style={styles.segmentContainer}>
                 <TouchableOpacity
-                    style={[styles.segmentBtn, segment === 'business' && styles.segmentActive]}
-                    onPress={() => setSegment('business')}
+                    style={[styles.segmentBtn, segment === 'all' && styles.segmentActive]}
+                    onPress={() => setSegment('all')}
                 >
-                    <Text style={[styles.segmentText, segment === 'business' && styles.segmentTextActive]}>Business</Text>
+                    <Text style={[styles.segmentText, segment === 'all' && styles.segmentTextActive]}>All</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={[styles.segmentBtn, segment === 'personal' && styles.segmentActive]}
@@ -177,41 +207,47 @@ const AnalyticsScreen = ({ navigation }: any) => {
                 >
                     <Text style={[styles.segmentText, segment === 'personal' && styles.segmentTextActive]}>Personal</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, segment === 'business' && styles.segmentActive]}
+                    onPress={() => setSegment('business')}
+                >
+                    <Text style={[styles.segmentText, segment === 'business' && styles.segmentTextActive]}>Business</Text>
+                </TouchableOpacity>
             </View>
 
             {/* Quick Filters */}
             <View style={styles.filtersRow}>
-                <TouchableOpacity
-                    style={[styles.filterChip, filterType === 'all' && styles.filterChipActive]}
+                <FilterChip
+                    label="All"
+                    icon={LayoutList}
+                    isActive={filterType === 'all'}
+                    activeColor="#0F172A"
                     onPress={() => setFilterType('all')}
-                >
-                    <LayoutList size={16} color={filterType === 'all' ? '#FFF' : colors.text} />
-                    <Text style={[styles.filterText, filterType === 'all' && { color: '#FFF' }]}>All</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.filterChip, filterType === 'income' && styles.filterChipActive, filterType !== 'income' && { borderColor: '#E2E8F0', borderWidth: 1 }]}
+                />
+                <FilterChip
+                    label="Income"
+                    icon={ArrowDownLeft}
+                    isActive={filterType === 'income'}
+                    activeColor="#10B981"
+                    defaultColor="#10B981"
                     onPress={() => setFilterType('income')}
-                >
-                    <ArrowDownLeft size={16} color="#10B981" />
-                    <Text style={styles.filterText}>Income</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.filterChip, filterType === 'expense' && styles.filterChipActive, filterType !== 'expense' && { borderColor: '#E2E8F0', borderWidth: 1 }]}
+                />
+                <FilterChip
+                    label="Expense"
+                    icon={ArrowUpRight}
+                    isActive={filterType === 'expense'}
+                    activeColor="#EF4444"
+                    defaultColor="#EF4444"
                     onPress={() => setFilterType('expense')}
-                >
-                    <ArrowUpRight size={16} color="#EF4444" />
-                    <Text style={styles.filterText}>Expense</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.filterChip, { backgroundColor: '#FFF7ED', borderColor: '#FFEDD5', borderWidth: 1 }, filterType === 'review' && { backgroundColor: '#FDBA74' }]}
+                />
+                <FilterChip
+                    label="Review"
+                    icon={AlertTriangle}
+                    isActive={filterType === 'review'}
+                    activeColor="#F97316"
+                    defaultColor="#F97316"
                     onPress={() => setFilterType('review')}
-                >
-                    <AlertTriangle size={16} color="#F97316" />
-                    <Text style={[styles.filterText, { color: '#C2410C' }]}>Review</Text>
-                </TouchableOpacity>
+                />
             </View>
         </View >
     );
@@ -259,7 +295,7 @@ const AnalyticsScreen = ({ navigation }: any) => {
                 )}
                 contentContainerStyle={{ paddingBottom: 100, paddingHorizontal: 20 }}
                 showsVerticalScrollIndicator={false}
-                stickySectionHeadersEnabled={false}
+                stickySectionHeadersEnabled={true}
                 ListEmptyComponent={
                     <View style={{ alignItems: 'center', marginTop: 60 }}>
                         <Text style={{ color: colors.textSecondary }}>No transactions found</Text>
@@ -374,16 +410,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 8,
         paddingHorizontal: 14,
-        backgroundColor: '#FFF',
         borderRadius: 20,
         gap: 6,
         shadowColor: "#000",
         shadowOpacity: 0.05,
         shadowRadius: 2,
-        elevation: 1
-    },
-    filterChipActive: {
-        backgroundColor: '#0F172A', // Dark
+        elevation: 1,
+        // Overflow hidden is key to preventing background bleed on rounded corners if any child has background
+        overflow: 'hidden'
     },
     filterText: {
         fontSize: 12,
@@ -393,9 +427,12 @@ const styles = StyleSheet.create({
     sectionHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'flex-end',
-        marginTop: 20,
-        marginBottom: 12
+        alignItems: 'center', // Changed to center for better alignment when sticky
+        paddingTop: 16,     // Added padding for sticky state
+        paddingBottom: 8,   // Adjusted padding
+        backgroundColor: colors.background, // Opaque background is critical for sticky headers
+        // Optional: Add shadow or border if distinct separation is needed
+        zIndex: 1
     },
     sectionTitle: {
         fontSize: 13,

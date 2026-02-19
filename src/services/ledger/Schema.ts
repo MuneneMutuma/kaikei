@@ -17,6 +17,7 @@ export interface Expense {
     transactionId?: string;
     isVerified: boolean;
     synced: boolean;
+    isBusiness: boolean; // New Field: Personal (false) vs Business (true)
     categoryName?: string; // Optional join field
     excludeFromAnalytics?: boolean;
     type: 'income' | 'expense' | 'transfer';

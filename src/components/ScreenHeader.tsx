@@ -13,6 +13,7 @@ interface ScreenHeaderProps {
     showBackButton?: boolean;
     actionIcon?: React.ReactNode;
     onActionPress?: () => void;
+    compact?: boolean;
 }
 
 export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
@@ -21,14 +22,15 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
     showNotification = true,
     showBackButton = false,
     actionIcon,
-    onActionPress
+    onActionPress,
+    compact = true
 }) => {
     const insets = useSafeAreaInsets();
     const navigation = useNavigation();
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
-            <View style={styles.topBar}>
+        <View style={[styles.container, { paddingTop: insets.top + (compact ? 4 : 10), paddingBottom: compact ? 0 : 10 }]}>
+            <View style={[styles.topBar, compact && { marginBottom: 4, marginTop: 4 }]}>
                 <View style={styles.leftContainer}>
                     {showBackButton && (
                         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -36,8 +38,8 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
                         </TouchableOpacity>
                     )}
                     <View>
-                        {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
-                        <Text style={styles.title}>{title}</Text>
+                        {subtitle && <Text style={[styles.subtitle, compact && { marginBottom: 0 }]}>{subtitle}</Text>}
+                        <Text style={[styles.title, compact && { fontSize: 24, lineHeight: 28 }]}>{title}</Text>
                     </View>
                 </View>
 

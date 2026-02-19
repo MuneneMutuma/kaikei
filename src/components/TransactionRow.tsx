@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Expense } from '../services/ledger/Schema';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Mic, AlertCircle } from 'lucide-react-native';
+import { Mic, AlertCircle, Briefcase, User } from 'lucide-react-native';
 import { getCategoryIcon, getCategoryColor } from '../screens/AnalyticsScreen';
 
 interface TransactionRowProps {
@@ -40,6 +40,15 @@ export const TransactionRow: React.FC<TransactionRowProps> = ({ item, onPress, s
                 </View>
                 {needsReview && (
                     <View style={styles.reviewDot} />
+                )}
+                {!!item.isBusiness ? (
+                    <View style={styles.businessBadge}>
+                        <Briefcase size={8} color="white" />
+                    </View>
+                ) : (
+                    <View style={styles.personalBadge}>
+                        <User size={8} color="white" />
+                    </View>
                 )}
             </View>
 
@@ -97,6 +106,32 @@ const styles = StyleSheet.create({
         height: 10,
         borderRadius: 5,
         backgroundColor: '#F59E0B', // Orange warning
+        borderWidth: 1.5,
+        borderColor: colors.surface,
+    },
+    businessBadge: {
+        position: 'absolute',
+        bottom: -2,
+        right: -2,
+        backgroundColor: '#0EA5E9', // Sky Blue
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1.5,
+        borderColor: colors.surface,
+    },
+    personalBadge: {
+        position: 'absolute',
+        bottom: -2,
+        right: -2,
+        backgroundColor: '#10B981', // Emerald Green
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
         borderWidth: 1.5,
         borderColor: colors.surface,
     },

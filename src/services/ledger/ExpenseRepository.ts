@@ -12,12 +12,14 @@ export class ExpenseRepository {
     public async addExpense(expense: Omit<Expense, 'id' | 'synced'> | Omit<Expense, 'id' | 'synced' | 'isVerified'>): Promise<Expense> {
         const id = uuidv4();
         const isVerified = 'isVerified' in expense ? expense.isVerified : false;
+        // Default to false (Personal) if not provided
+        const isBusiness = expense.isBusiness || false;
 
         // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
         const result = await this.db.execute(
             `INSERT OR IGNORE INTO expenses (
-                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 id,
                 expense.amount,
@@ -32,7 +34,8 @@ export class ExpenseRepository {
                 expense.sender || null,
                 expense.recipient || null,
                 isVerified ? 1 : 0,
-                0
+                0,
+                isBusiness ? 1 : 0
             ]
         );
 
@@ -56,7 +59,8 @@ export class ExpenseRepository {
             sender: expense.sender || undefined,
             recipient: expense.recipient || undefined,
             isVerified,
-            synced: false
+            synced: false,
+            isBusiness
         };
 
         return newExpense;
@@ -77,7 +81,8 @@ export class ExpenseRepository {
         return Database.getRows(result).map(row => ({
             ...row,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
-            type: row.type || 'expense'
+            type: row.type || 'expense',
+            isBusiness: !!row.isBusiness
         })) as Expense[];
     }
 
@@ -110,7 +115,8 @@ export class ExpenseRepository {
         return Database.getRows(result).map(row => ({
             ...row,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
-            type: row.type || 'expense'
+            type: row.type || 'expense',
+            isBusiness: !!row.isBusiness
         })) as Expense[];
     }
 
@@ -206,7 +212,7 @@ export class ExpenseRepository {
 
     // --- Updates ---
 
-    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics'>>): Promise<void> {
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness'>>): Promise<void> {
         const sets: string[] = [];
         const args: any[] = [];
 
@@ -229,6 +235,10 @@ export class ExpenseRepository {
         if (updates.excludeFromAnalytics !== undefined) {
             sets.push('excludeFromAnalytics = ?');
             args.push(updates.excludeFromAnalytics ? 1 : 0);
+        }
+        if (updates.isBusiness !== undefined) {
+            sets.push('isBusiness = ?');
+            args.push(updates.isBusiness ? 1 : 0);
         }
 
         if (sets.length === 0) return;
@@ -258,7 +268,13 @@ export class ExpenseRepository {
 
         const rows = Database.getRows(result);
         if (rows.length > 0) {
-            return rows[0] as Expense;
+            const row = rows[0];
+            return {
+                ...row,
+                isVerified: !!row.isVerified,
+                excludeFromAnalytics: !!row.excludeFromAnalytics,
+                isBusiness: !!row.isBusiness
+            } as Expense;
         }
         return null;
     }
@@ -307,7 +323,12 @@ export class ExpenseRepository {
         );
 
         console.log("[ExpenseRepository] Uncategorized Expenses:", result.rows);
-        return Database.getRows(result) as Expense[];
+        return Database.getRows(result).map(row => ({
+            ...row,
+            isVerified: !!row.isVerified,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            isBusiness: !!row.isBusiness
+        })) as Expense[];
     }
 
     /**
@@ -332,7 +353,12 @@ export class ExpenseRepository {
            ORDER BY e.date DESC`,
             [startDate, endDate]
         );
-        return Database.getRows(result) as Expense[];
+        return Database.getRows(result).map(row => ({
+            ...row,
+            isVerified: !!row.isVerified,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            isBusiness: !!row.isBusiness
+        })) as Expense[];
     }
 
     public async getCategoryTotals(startDate: string, endDate: string): Promise<{ name: string; total: number }[]> {
@@ -390,9 +416,14 @@ export class ExpenseRepository {
              LIMIT ?`,
             [limit]
         );
-        const rows = Database.getRows(result) as Expense[];
+        const rows = Database.getRows(result);
         console.log(`[ExpenseRepository] getUncategorizedExpenses returned ${rows.length} items`);
-        return rows;
+        return rows.map(row => ({
+            ...row,
+            isVerified: !!row.isVerified,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            isBusiness: !!row.isBusiness
+        })) as Expense[];
     }
 
     public async scanAndFlagInternalTransfers() {

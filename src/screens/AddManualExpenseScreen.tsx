@@ -9,12 +9,13 @@ import {
     ActivityIndicator,
     Alert,
     StatusBar,
-    BackHandler
+    BackHandler,
+    Switch
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { View as MotiView } from 'moti';
-import { Check, ChevronLeft, X } from 'lucide-react-native';
+import { Check, ChevronLeft, X, Briefcase } from 'lucide-react-native';
 
 import AmountStep from "./AmountStep";
 import CategoryStep, { getCategoryColor, getCategoryIcon } from "./CategoryStep";
@@ -36,6 +37,7 @@ const AddManualExpenseScreen: React.FC = () => {
     const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
     const [dbCategories, setDbCategories] = useState<Category[]>([]);
     const [note, setNote] = useState<string>("");
+    const [isBusiness, setIsBusiness] = useState(false);
 
     // UI State
     const [saving, setSaving] = useState(false);
@@ -79,7 +81,8 @@ const AddManualExpenseScreen: React.FC = () => {
                 source: 'manual',
                 rawText: '',
                 type: 'expense',
-                isVerified: true
+                isVerified: true,
+                isBusiness // <--- Passed to repo
             });
             navigation.goBack();
         } catch (e) {
@@ -179,7 +182,7 @@ const AddManualExpenseScreen: React.FC = () => {
                     </MotiView>
                 )}
 
-                {/* Step 3: Note */}
+                {/* Step 3: Note & Business Toggle */}
                 {step === 3 && (
                     <MotiView
                         from={{ opacity: 0, scale: 0.9 }}
@@ -187,6 +190,49 @@ const AddManualExpenseScreen: React.FC = () => {
                         transition={{ type: 'timing', duration: 300 }}
                         style={{ flex: 1 }}
                     >
+                        {/* Business Toggle Row */}
+                        <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => setIsBusiness(!isBusiness)}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                backgroundColor: 'white',
+                                paddingHorizontal: 16,
+                                paddingVertical: 12,
+                                borderRadius: 16,
+                                marginBottom: 16,
+                                marginTop: 8,
+                                shadowColor: "#000",
+                                shadowOpacity: 0.05,
+                                shadowRadius: 5,
+                                elevation: 1
+                            }}
+                        >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                <View style={{
+                                    width: 40, height: 40, borderRadius: 20,
+                                    backgroundColor: isBusiness ? '#E0F2FE' : '#F1F5F9',
+                                    alignItems: 'center', justifyContent: 'center'
+                                }}>
+                                    <Briefcase size={20} color={isBusiness ? '#0284C7' : colors.textSecondary} />
+                                </View>
+                                <View>
+                                    <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>Business Expense</Text>
+                                    <Text style={{ fontSize: 12, color: colors.textSecondary }}>
+                                        {isBusiness ? 'Marked as Business' : 'Marked as Personal'}
+                                    </Text>
+                                </View>
+                            </View>
+                            <Switch
+                                value={isBusiness}
+                                onValueChange={setIsBusiness}
+                                trackColor={{ false: '#E2E8F0', true: '#0EA5E9' }}
+                                thumbColor={'white'}
+                            />
+                        </TouchableOpacity>
+
                         <NoteStep
                             note={note}
                             setNote={setNote}

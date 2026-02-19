@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, TextInput, ActivityIndicator, Alert, ScrollView, KeyboardAvoidingView, Platform, LayoutAnimation } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, TextInput, ActivityIndicator, Alert, ScrollView, KeyboardAvoidingView, Platform, LayoutAnimation, Switch } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Expense, Category } from '../services/ledger/Schema';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Check, Trash2, Calendar, Clock, Tag, Save, AlertTriangle, ChevronRight, ChevronDown, Edit3 } from 'lucide-react-native';
+import { Check, Trash2, Calendar, Clock, Tag, Save, AlertTriangle, ChevronRight, ChevronDown, Edit3, Briefcase, User } from 'lucide-react-native';
 import { getCategoryIcon, getCategoryColor } from '../screens/AnalyticsScreen';
 
 interface TransactionDetailModalProps {
@@ -21,6 +21,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
     const [categoryId, setCategoryId] = useState('');
+    const [isBusiness, setIsBusiness] = useState(false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
@@ -31,6 +32,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
             setDescription(transaction.description);
             setAmount(transaction.amount.toString());
             setCategoryId(transaction.categoryId);
+            setIsBusiness(transaction.isBusiness || false);
             loadCategories();
         }
     }, [visible, transaction]);
@@ -48,7 +50,8 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                 description,
                 amount: parseFloat(amount) || transaction.amount,
                 categoryId,
-                isVerified: true
+                isVerified: true,
+                isBusiness
             });
             onUpdate();
             onClose();
@@ -208,6 +211,29 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                             </ScrollView>
                         </View>
                     )}
+
+                    {/* Footer Actions - Equal Width */}
+                    {/* Business/Personal Toggle */}
+                    {/* Business/Personal Selector Cards */}
+                    <View style={styles.selectorContainer}>
+                        <TouchableOpacity
+                            style={[styles.selectorCard, !isBusiness && styles.selectedCardPersonal]}
+                            onPress={() => setIsBusiness(false)}
+                            activeOpacity={0.8}
+                        >
+                            <User size={24} color={!isBusiness ? '#059669' : '#94A3B8'} />
+                            <Text style={[styles.selectorText, !isBusiness && styles.selectedTextPersonal]}>Personal</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.selectorCard, isBusiness && styles.selectedCardBusiness]}
+                            onPress={() => setIsBusiness(true)}
+                            activeOpacity={0.8}
+                        >
+                            <Briefcase size={24} color={isBusiness ? '#0284C7' : '#94A3B8'} />
+                            <Text style={[styles.selectorText, isBusiness && styles.selectedTextBusiness]}>Business</Text>
+                        </TouchableOpacity>
+                    </View>
 
                     <View style={styles.divider} />
 
@@ -405,6 +431,45 @@ const styles = StyleSheet.create({
     btnSave: {
         backgroundColor: colors.primary,
     },
+
+    // Selector Cards
+    selectorContainer: {
+        flexDirection: 'row',
+        gap: 12,
+        marginBottom: 16,
+    },
+    selectorCard: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 2,
+        borderColor: 'transparent',
+    },
+    selectorText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#94A3B8',
+    },
+    selectedCardPersonal: {
+        backgroundColor: '#ECFDF5',
+        borderColor: '#10B981',
+    },
+    selectedTextPersonal: {
+        color: '#059669',
+    },
+    selectedCardBusiness: {
+        backgroundColor: '#E0F2FE',
+        borderColor: '#0EA5E9',
+    },
+    selectedTextBusiness: {
+        color: '#0284C7',
+    },
+
     btnText: {
         fontWeight: 'bold',
         fontSize: 16,

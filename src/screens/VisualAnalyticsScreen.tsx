@@ -17,6 +17,7 @@ const VisualAnalyticsScreen = () => {
     const insets = useSafeAreaInsets();
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [loading, setLoading] = useState(true);
+    const [segment, setSegment] = useState<'all' | 'business' | 'personal'>('all');
 
     // Time Navigation State
     const [selectedMonth, setSelectedMonth] = useState(new Date()); // Default to now
@@ -88,10 +89,15 @@ const VisualAnalyticsScreen = () => {
 
         return expenses.filter(e => {
             if (e.type !== 'expense') return false;
+
+            // Segment Filter
+            if (segment === 'business' && !e.isBusiness) return false;
+            if (segment === 'personal' && e.isBusiness) return false;
+
             const d = new Date(e.date);
             return d.getFullYear() === year && d.getMonth() === month;
         });
-    }, [expenses, selectedMonth]);
+    }, [expenses, selectedMonth, segment]);
 
     const totalSpend = useMemo(() => filteredExpenses.reduce((sum, e) => sum + e.amount, 0), [filteredExpenses]);
 
@@ -210,10 +216,10 @@ const VisualAnalyticsScreen = () => {
 
     return (
         <View style={styles.container}>
-            <ScreenHeader title="Analytics" subtitle="Spending Breakdown" showNotification={false} />
+            <ScreenHeader title="Analytics" subtitle="Spending Breakdown" showNotification={false} compact={true} />
 
             {/* Month Navigation - Sticky */}
-            <View style={styles.navRow}>
+            <View style={[styles.navRow, { marginTop: 0, marginBottom: 8 }]}>
                 <TouchableOpacity onPress={goToPrevMonth} style={styles.navBtn}>
                     <ChevronLeft size={24} color="#0d1b12" />
                 </TouchableOpacity>
@@ -229,6 +235,28 @@ const VisualAnalyticsScreen = () => {
                     disabled={isNextDisabled}
                 >
                     <ChevronRight size={24} color="#0d1b12" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Segment Control */}
+            <View style={styles.segmentContainer}>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, segment === 'all' && styles.segmentActive]}
+                    onPress={() => setSegment('all')}
+                >
+                    <Text style={[styles.segmentText, segment === 'all' && styles.segmentTextActive]}>All</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, segment === 'personal' && styles.segmentActive]}
+                    onPress={() => setSegment('personal')}
+                >
+                    <Text style={[styles.segmentText, segment === 'personal' && styles.segmentTextActive]}>Personal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.segmentBtn, segment === 'business' && styles.segmentActive]}
+                    onPress={() => setSegment('business')}
+                >
+                    <Text style={[styles.segmentText, segment === 'business' && styles.segmentTextActive]}>Business</Text>
                 </TouchableOpacity>
             </View>
 
@@ -379,10 +407,10 @@ const VisualAnalyticsScreen = () => {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    scrollContent: { padding: 20, paddingBottom: 100 },
+    scrollContent: { paddingHorizontal: 20, paddingBottom: 100, paddingTop: 10 },
 
     // Navigation
-    navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 20, marginTop: 5, marginBottom: 10, backgroundColor: 'white', borderRadius: 16, padding: 8, elevation: 1 },
+    navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 20, marginTop: 5, marginBottom: 10, backgroundColor: 'white', borderRadius: 16, padding: 6, elevation: 1 },
     navBtn: { padding: 10, borderRadius: 12, backgroundColor: '#f1f5f9' },
     dateDisplay: { flexDirection: 'row', alignItems: 'center' },
     dateText: { fontSize: 16, fontWeight: 'bold', color: '#0d1b12' },
@@ -391,7 +419,7 @@ const styles = StyleSheet.create({
         backgroundColor: colors.surface,
         borderRadius: 16,
         padding: 20,
-        marginBottom: 20,
+        marginBottom: 16,
         borderLeftWidth: 4,
         borderLeftColor: colors.primary,
         shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2
@@ -405,7 +433,7 @@ const styles = StyleSheet.create({
         backgroundColor: colors.surface,
         borderRadius: 16,
         padding: 20,
-        marginBottom: 20,
+        marginBottom: 16,
         shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2
     },
     chartTitle: { fontSize: 16, fontWeight: 'bold', color: '#0d1b12', marginBottom: 4 },
@@ -433,6 +461,35 @@ const styles = StyleSheet.create({
     txTitle: { fontSize: 14, fontWeight: '600', color: '#0d1b12', marginBottom: 2 },
     txMeta: { fontSize: 12, color: '#64748b' },
     txAmount: { fontSize: 14, fontWeight: 'bold', color: '#dc2626' },
+
+    // Segment
+    segmentContainer: {
+        flexDirection: 'row',
+        marginHorizontal: 20,
+        padding: 4,
+        backgroundColor: '#E2E8F0',
+        borderRadius: 14,
+        marginBottom: 8
+    },
+    segmentBtn: {
+        flex: 1,
+        paddingVertical: 8,
+        alignItems: 'center',
+        borderRadius: 10,
+    },
+    segmentActive: {
+        backgroundColor: '#FFF',
+        elevation: 1,
+        shadowOpacity: 0.1
+    },
+    segmentText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#64748B'
+    },
+    segmentTextActive: {
+        color: colors.text
+    },
 });
 
 export default VisualAnalyticsScreen;
