@@ -49,7 +49,7 @@ export default function ProfileScreen() {
     const handleStrategyToggle = async (strategy: 'history' | 'llm', enabled: boolean) => {
         if (strategy === 'history') setHistoryEnabled(enabled);
         if (strategy === 'llm') setLlmEnabled(enabled);
-        
+
         try {
             await AutoClassifier.getInstance().setStrategyEnabled(strategy, enabled);
         } catch (e) {
@@ -166,6 +166,30 @@ export default function ProfileScreen() {
         }
         setTimeout(refreshHealthCheck, 2000);
     };
+
+    const loadUserProfile = async () => {
+        const settings = await settingsRepo.getUserSettings();
+        setUserProfile({
+            name: settings.userName || 'User',
+            persona: settings.userPersona || 'Standard',
+            email: ''
+        });
+    };
+
+    const handlePersonaSwitch = async (newPersona: string) => {
+        await settingsRepo.saveUserProfile(userProfile.name, newPersona);
+
+        // Ensure categories exist for the new persona
+        await expenseRepo.ensureCategoriesForPersona(newPersona);
+
+        setUserProfile(prev => ({ ...prev, persona: newPersona }));
+        setPersonaModalVisible(false);
+        Alert.alert("Success", `Switched to ${newPersona} account.`);
+    };
+
+    useEffect(() => {
+        loadUserProfile();
+    }, []);
 
     const handleBackup = async () => {
         setBackupMode('export');
