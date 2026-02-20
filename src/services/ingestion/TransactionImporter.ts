@@ -257,8 +257,8 @@ export class TransactionImporter {
                 }
             }
 
-            // 7. Emit event for UI refresh (only if actually inserted)
-            if (source !== 'manual') {
+            // 7. Emit event for UI refresh
+            if (true) {
                 // Resolve category name for event
                 let categoryName = 'Other';
                 try {

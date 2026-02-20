@@ -147,6 +147,12 @@ class IngestionServiceImpl {
      * Used by both Tier 1 (runtime) and Tier 2 (headless task).
      */
     async processRawMessage(body: string, source: 'auto' | 'catchup' = 'auto'): Promise<void> {
+        // Strict Guard: Check setting again to prevent unwanted imports
+        if (!await this.settings.isAutoImportEnabled()) {
+            console.log(`[IngestionService] Skipping import (Auto-Import disabled): ${source}`);
+            return;
+        }
+
         try {
             const parsed = parseMpesaMessage(body);
             if (!parsed || !parsed.tx_id) {
@@ -171,6 +177,11 @@ class IngestionServiceImpl {
      * Runs on app launch and when app returns to foreground.
      */
     async runCatchUpScan(): Promise<CatchUpResult> {
+        if (!await this.settings.isAutoImportEnabled()) {
+            console.log('[IngestionService] Catch-up scan skipped (Auto-Import disabled)');
+            return { imported: 0, skipped: 0, errors: 0 };
+        }
+
         console.log('[IngestionService] Tier 3: Starting catch-up scan...');
         this.lastCatchUpTimestamp = Date.now();
 

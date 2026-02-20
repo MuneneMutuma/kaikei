@@ -12,12 +12,14 @@ import {
   TextInput,
   RefreshControl,
   ActivityIndicator,
+  Switch,
+  LayoutAnimation,
 } from "react-native";
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import SmsAndroid from "react-native-get-sms-android";
 import { ScreenHeader } from "../components/ScreenHeader";
-import { DownloadCloud } from "lucide-react-native";
+import { DownloadCloud, CheckCircle2, XCircle, Briefcase, User, Filter, ArrowRight, Ban, Check } from "lucide-react-native";
 import { parseMpesaMessage, MpesaTransaction } from "../utils/mpesaParser";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
@@ -44,6 +46,7 @@ export default function SMSReaderScreen() {
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [editDescription, setEditDescription] = useState("");
   const [editCategoryId, setEditCategoryId] = useState("");
+  const [filterMode, setFilterMode] = useState<'inbox' | 'all'>('inbox');
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryModalVisible, setCategoryModalVisible] = useState(false);
 
@@ -135,17 +138,41 @@ export default function SMSReaderScreen() {
 
         setTransactions(parsed);
 
-        // Check Sync Status
-        const newSynced = new Set<string>();
-        for (const tx of parsed) {
-          if (await repo.current.existsByTransactionId(tx.tx_id)) {
-            newSynced.add(tx.tx_id);
-          }
-        }
-        setSyncedTxIds(newSynced);
+        // Check Sync Status (Bulk)
+        const allSynced = await repo.current.getAllTransactionIds();
+
+        // Filter Synced Logic: 
+        // We only care about the ones in our current list for display, 
+        // but `allSynced` is the source of truth.
+        // Let's perform the intersection for local state if we want, 
+        // OR just keep the whole set (it's O(1) lookup anyway).
+
+        setSyncedTxIds(allSynced);
         setLoading(false);
       }
     );
+  };
+
+  const getFilteredTransactions = () => {
+    if (filterMode === 'all') return transactions;
+    return transactions.filter(tx => !syncedTxIds.has(tx.tx_id) && !ignoredTxIds.has(tx.tx_id));
+  };
+
+  const filteredData = getFilteredTransactions();
+
+  const handleImportAll = async () => {
+    // Import all visible (Inbox) items
+    if (loading) return;
+    const candidates = filteredData.filter(tx => !syncedTxIds.has(tx.tx_id) && !ignoredTxIds.has(tx.tx_id));
+
+    if (candidates.length === 0) {
+      Alert.alert("All Caught Up", "No new transactions to import.");
+      return;
+    }
+
+    setLoading(true);
+    await performBulkImport(candidates);
+    setLoading(false);
   };
 
   const handleSelectAll = async () => {
@@ -219,44 +246,44 @@ export default function SMSReaderScreen() {
     }
   };
 
-  const handleToggleBusiness = async (item: MpesaTransaction) => {
-    if (syncedTxIds.has(item.tx_id)) {
-      // Already imported — offer delete
-      Alert.alert("Actions", "Transaction already imported. Delete?", [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete", style: 'destructive', onPress: async () => {
-            await repo.current.deleteByTransactionId(item.tx_id);
-            const next = new Set(syncedTxIds);
-            next.delete(item.tx_id);
-            setSyncedTxIds(next);
-          }
-        }
-      ]);
-      return;
-    }
-
-    // Import single transaction via shared importer
+  const handleMarkBusiness = async (item: MpesaTransaction) => {
+    // Import Logic
     try {
       const result = await importer.current.importTransaction(item, 'manual');
-
       if (result.success && !result.skipped) {
         const next = new Set(syncedTxIds);
         next.add(item.tx_id);
         setSyncedTxIds(next);
+
+        // If it was ignored, remove from ignored
+        if (ignoredTxIds.has(item.tx_id)) {
+          await repo.current.unIgnoreTransaction(item.tx_id);
+          const nextIgnored = new Set(ignoredTxIds);
+          nextIgnored.delete(item.tx_id);
+          setIgnoredTxIds(nextIgnored);
+        }
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleMarkPersonal = async (item: MpesaTransaction) => {
+    // Ignore Logic
+    try {
+      // If synced, delete
+      if (syncedTxIds.has(item.tx_id)) {
+        await repo.current.deleteByTransactionId(item.tx_id);
+        const next = new Set(syncedTxIds);
+        next.delete(item.tx_id);
+        setSyncedTxIds(next);
       }
 
-      // If it was ignored, unignore
-      if (ignoredTxIds.has(item.tx_id)) {
-        await repo.current.unIgnoreTransaction(item.tx_id);
-        const nextIgnored = new Set(ignoredTxIds);
-        nextIgnored.delete(item.tx_id);
-        setIgnoredTxIds(nextIgnored);
-      }
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "Failed to import.");
-    }
+      await repo.current.ignoreTransaction(item.tx_id);
+      const nextIgnored = new Set(ignoredTxIds);
+      nextIgnored.add(item.tx_id);
+      setIgnoredTxIds(nextIgnored);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    } catch (e) { console.error(e); }
   };
 
   const renderItem = ({ item }: { item: MpesaTransaction }) => {
@@ -268,62 +295,74 @@ export default function SMSReaderScreen() {
     let displayParty = isIncome ? item.from : (item.to || item.account || "Unknown");
 
     if (item.type === 'internal' || item.direction === 'internal' || item.type === 'transfer') {
-      // Internal Transfer Logic:
-      // M-PESA is the center.
       if (item.from?.toUpperCase() === 'M-PESA') {
-        // Moving FROM M-Pesa -> Other (e.g. Pochi)
-        isIncome = false; // Outgoing visual
-        displayParty = `Transfer to ${item.to || 'Internal Account'}`;
+        isIncome = false;
+        displayParty = `Transfer to ${item.to || 'Internal'}`;
       } else {
-        // Moving TO M-Pesa (from Pochi/Mshwari)
-        isIncome = true; // Incoming visual
-        displayParty = `Transfer from ${item.from || 'Internal Account'}`;
+        isIncome = true;
+        displayParty = `Transfer from ${item.from || 'Internal'}`;
       }
     }
 
+    // Determine Status
+    // Business (Synced) | Personal (Ignored) | Unprocessed (Neither)
+    const isBusiness = isSynced;
+
     return (
-      <TouchableOpacity
-        style={[styles.card, isIgnored && styles.cardIgnored]}
-        onPress={() => openDetails(item)}
-        activeOpacity={0.9}
-      >
-        <View style={styles.cardHeader}>
-          {/* Icon */}
-          <View style={styles.iconContainer}>
-            <Text style={styles.icon}>{isIncome ? '📥' : '📤'}</Text>
+      <View style={styles.rowContainer}>
+        {/* Icon Column */}
+        <View style={styles.iconCol}>
+          <View style={[styles.iconCircle, { backgroundColor: isSynced ? colors.primary + '15' : (isIgnored ? '#f1f5f9' : '#e0f2fe') }]}>
+            {isSynced ? <Briefcase size={20} color={colors.primary} /> :
+              isIgnored ? <User size={20} color="#94a3b8" /> :
+                <Filter size={20} color="#0ea5e9" />}
           </View>
-
-          {/* Content */}
-          <View style={{ flex: 1, marginRight: 10 }}>
-            <Text style={styles.party} numberOfLines={1}>
-              {displayParty}
-            </Text>
-            <View style={styles.rowMeta}>
-              <Text style={styles.date}>{item.date} • {item.time}</Text>
+          {isSynced && (
+            <View style={styles.businessBadge}>
+              <Briefcase size={8} color="white" />
             </View>
-            <Text style={[styles.amount, isIncome ? styles.textGreen : styles.textBlack]}>
-              {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
-            </Text>
-          </View>
-
-          {/* Toggle (Checkbox) */}
-          <TouchableOpacity
-            style={[styles.checkbox, isSynced ? styles.checkboxChecked : styles.checkboxUnchecked]}
-            onPress={() => handleToggleBusiness(item)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={styles.checkboxIcon}>{isSynced ? '✓' : ''}</Text>
-          </TouchableOpacity>
+          )}
         </View>
 
-        {/* Status Text (Optional, small) */}
-        {isSynced && (
-          <Text style={styles.miniStatus}>Business</Text>
-        )}
-        {isIgnored && (
-          <Text style={styles.miniStatusPersonal}>Personal</Text>
-        )}
-      </TouchableOpacity>
+        {/* Content Column */}
+        <TouchableOpacity style={styles.contentCol} onPress={() => openDetails(item)}>
+          <Text style={[styles.rowTitle, isIgnored && { textDecorationLine: 'line-through', color: '#94a3b8' }]} numberOfLines={1}>
+            {displayParty}
+          </Text>
+          <View style={styles.metaRow}>
+            <Text style={styles.rowSubtitle}>
+              {item.date} • {item.time} {item.account ? `• ${item.account}` : ''}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* Amount & Actions Column */}
+        <View style={styles.amountCol}>
+          <Text style={[styles.amount, { color: isIncome ? colors.success : colors.text }]}>
+            {isIncome ? '+' : '-'} {item.amount.toLocaleString()}
+          </Text>
+
+          {/* Actions (Only if not synced) */}
+          {!isSynced && (
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.actionBtn, isIgnored && styles.actionBtnActivePersonal]}
+                onPress={() => handleMarkPersonal(item)}
+                disabled={isIgnored}
+              >
+                <User size={16} color={isIgnored ? 'white' : '#94a3b8'} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => handleMarkBusiness(item)}
+              >
+                <Briefcase size={16} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
     );
   };
 
@@ -333,16 +372,37 @@ export default function SMSReaderScreen() {
     <View style={styles.container}>
       {/* Header */}
       <ScreenHeader
-        title="Imports"
+        title="M-Pesa Sync"
         subtitle={`${transactions.length} messages found`}
-        actionIcon={<DownloadCloud size={24} color={colors.primary} />}
-        onActionPress={handleSelectAll}
-        showNotification={false}
+        showBackButton={true}
       />
 
+      {/* Controls Bar */}
+      <View style={styles.topBar}>
+        <View style={styles.segmentContainer}>
+          <TouchableOpacity
+            style={[styles.segmentBtn, filterMode === 'inbox' && styles.segmentBtnActive]}
+            onPress={() => setFilterMode('inbox')}
+          >
+            <Text style={[styles.segmentText, filterMode === 'inbox' && styles.segmentTextActive]}>Inbox</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentBtn, filterMode === 'all' && styles.segmentBtnActive]}
+            onPress={() => setFilterMode('all')}
+          >
+            <Text style={[styles.segmentText, filterMode === 'all' && styles.segmentTextActive]}>All</Text>
+          </TouchableOpacity>
+        </View>
+
+        {filterMode === 'inbox' && filteredData.length > 0 && (
+          <TouchableOpacity style={styles.importAllBtn} onPress={handleImportAll}>
+            <Text style={styles.importAllText}>Import All</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
       <FlatList
-        // ... same ...
-        data={transactions}
+        data={filteredData}
         keyExtractor={(item) => item.tx_id}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
@@ -516,8 +576,10 @@ export default function SMSReaderScreen() {
                     <TouchableOpacity
                       style={[styles.saveBtn, { width: '100%', backgroundColor: colors.primary }]}
                       onPress={() => {
-                        setDetailModalVisible(false);
-                        handleToggleBusiness(selectedTx);
+                        if (selectedTx) {
+                          setDetailModalVisible(false);
+                          handleMarkBusiness(selectedTx);
+                        }
                       }}
                     >
                       <Text style={styles.saveBtnText}>Import to Business</Text>
@@ -527,6 +589,7 @@ export default function SMSReaderScreen() {
                       <TouchableOpacity
                         style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
                         onPress={async () => {
+                          if (!selectedTx) return;
                           try {
                             await repo.current.ignoreTransaction(selectedTx.tx_id);
                             const nextIgnored = new Set(ignoredTxIds);
@@ -546,6 +609,7 @@ export default function SMSReaderScreen() {
                       <TouchableOpacity
                         style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
                         onPress={async () => {
+                          if (!selectedTx) return;
                           try {
                             await repo.current.unIgnoreTransaction(selectedTx.tx_id);
                             const nextIgnored = new Set(ignoredTxIds);
@@ -592,7 +656,7 @@ export default function SMSReaderScreen() {
         </View>
       </Modal>
 
-    </View>
+    </View >
   );
 }
 
@@ -602,26 +666,94 @@ const styles = StyleSheet.create({
   title: { ...typography.header, fontSize: 18, color: colors.text },
   listContent: { padding: 16, paddingBottom: Platform.OS === 'android' ? 100 : 80 },
 
-  card: { backgroundColor: colors.surface, borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: colors.primary, shadowOpacity: 0.05, shadowRadius: 5, elevation: 2 },
-  cardIgnored: { opacity: 0.7, backgroundColor: colors.background },
-  cardHeader: { flexDirection: 'row', alignItems: 'center' }, // Removed marginBottom to keep it tight
-  iconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  icon: { fontSize: 18, color: colors.text },
-  party: { ...typography.body, fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 2 },
-  rowMeta: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  date: { ...typography.caption, fontSize: 12, color: colors.textSecondary },
-  amount: { ...typography.mono, fontSize: 15, fontWeight: 'bold', marginTop: 2 },
-  textGreen: { color: colors.success },
-  textBlack: { color: colors.text },
+  // New Standard List Styles
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 12, backgroundColor: colors.background }, // Matched Home padding
+  segmentContainer: { flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 8, padding: 4 },
+  segmentBtn: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6 },
+  segmentBtnActive: { backgroundColor: 'white', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
+  segmentText: { fontSize: 13, fontWeight: '500', color: '#64748b' },
+  segmentTextActive: { color: colors.text, fontWeight: '600' },
 
-  // Toggle Checkbox
-  checkbox: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
-  checkboxChecked: { backgroundColor: colors.primary, borderColor: colors.primary },
-  checkboxUnchecked: { backgroundColor: 'transparent', borderColor: '#ccc' },
-  checkboxIcon: { color: 'white', fontWeight: 'bold', fontSize: 14 },
+  importAllBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primary + '15', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+  importAllText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
 
-  miniStatus: { fontSize: 10, color: colors.primary, fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
-  miniStatusPersonal: { fontSize: 10, color: colors.textSecondary, fontWeight: 'bold', marginTop: 8, marginLeft: 52 },
+  // TransactionRow EXACT Styles
+  rowContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16, // Increased from 12 for "larger card" feel
+    paddingHorizontal: 16,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.background,
+  },
+  iconCol: {
+    position: 'relative',
+    marginRight: 14,
+  },
+  iconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  businessBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: '#0EA5E9', // Sky Blue
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.surface,
+  },
+  contentCol: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  rowTitle: {
+    ...typography.body,
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 3,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rowSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  amountCol: {
+    alignItems: 'flex-end',
+    marginLeft: 8,
+  },
+  amount: {
+    ...typography.mono,
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+
+  // Custom Actions (blending into TransactionRow style)
+  actionRow: { flexDirection: 'row', gap: 10, marginTop: 6 }, // Increased gap
+  actionBtn: {
+    width: 34, // Increased from 24
+    height: 34,
+    borderRadius: 17, // 34/2
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0'
+  },
+  actionBtnActivePersonal: { backgroundColor: '#94a3b8', borderColor: '#94a3b8' },
+  actionBtnActiveBusiness: { backgroundColor: colors.primary, borderColor: colors.primary },
 
   // Drawer
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },

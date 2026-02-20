@@ -66,6 +66,31 @@ export class ExpenseRepository {
         return newExpense;
     }
 
+
+
+    /**
+     * Get Recent Expenses
+     * @param limit Number of expenses to return
+     */
+    public async getRecentExpenses(limit: number = 5): Promise<Expense[]> {
+        const result = await this.db.execute(
+            `SELECT e.*, c.name as categoryName 
+           FROM expenses e 
+           LEFT JOIN categories c ON e.categoryId = c.id
+           WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+           ORDER BY e.date DESC
+           LIMIT ?`,
+            [limit]
+        );
+
+        return Database.getRows(result).map(row => ({
+            ...row,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            type: row.type || 'expense',
+            isBusiness: !!row.isBusiness
+        })) as Expense[];
+    }
+
     /**
      * Get All Expenses (for Visual Analytics)
      */
@@ -202,6 +227,16 @@ export class ExpenseRepository {
 
     async getIgnoredTransactionIds(): Promise<Set<string>> {
         const result = await this.db.execute('SELECT transactionId FROM ignored_transactions');
+        const ids = new Set<string>();
+        const rows = Database.getRows(result);
+        for (let i = 0; i < rows.length; i++) {
+            ids.add(rows[i].transactionId);
+        }
+        return ids;
+    }
+
+    async getAllTransactionIds(): Promise<Set<string>> {
+        const result = await this.db.execute('SELECT transactionId FROM expenses WHERE transactionId IS NOT NULL');
         const ids = new Set<string>();
         const rows = Database.getRows(result);
         for (let i = 0; i < rows.length; i++) {
