@@ -98,6 +98,23 @@ export class Database {
         );
       `);
 
+        // Create Insights Table
+        db.execute(`
+        CREATE TABLE IF NOT EXISTS insights (
+          id TEXT PRIMARY KEY NOT NULL,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          metric TEXT,
+          icon TEXT,
+          score REAL,
+          created_at INTEGER NOT NULL,
+          source TEXT NOT NULL,
+          context_data TEXT, 
+          is_archived BOOLEAN DEFAULT 0
+        );
+      `);
+
         // Indices
         try {
           db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_recipient_nocase ON expenses(recipient COLLATE NOCASE)');

@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const screenWidth = Dimensions.get('window').width;
 
-const VisualAnalyticsScreen = () => {
+const VisualAnalyticsScreen = ({ navigation, route }: any) => {
     const insets = useSafeAreaInsets();
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [loading, setLoading] = useState(true);
@@ -34,6 +34,8 @@ const VisualAnalyticsScreen = () => {
     useEffect(() => {
         loadData();
     }, []);
+
+
 
     const loadData = async () => {
         setLoading(true);
@@ -131,6 +133,30 @@ const VisualAnalyticsScreen = () => {
             }
         }));
     }, [filteredExpenses, totalSpend, selectedCategory]);
+
+    // Handle deep link / navigation param to highlight a category
+    // This effect needs to run when pieData changes or the route params change
+    useEffect(() => {
+        if (route.params?.highlightCategory && pieData.length > 0) {
+            console.log("VisualAnalytics: Received highlight request:", route.params.highlightCategory);
+            const target = route.params.highlightCategory.toLowerCase();
+
+            const found = pieData.find(p => p.legend.toLowerCase() === target);
+            if (found) {
+                // Avoid infinite loop or redundant sets
+                if (!selectedCategory || selectedCategory.name !== found.legend) {
+                    console.log("VisualAnalytics: Found matching category, highlighting:", found.legend);
+                    setSelectedCategory({ name: found.legend, value: found.value, color: found.color });
+
+                    // Clear param to avoid re-triggering on future updates
+                    navigation.setParams({ highlightCategory: null });
+                }
+            } else {
+                console.log("VisualAnalytics: Category not found in current month view:", target);
+                // Optional: If not found, maybe try previous month? For now, just ignore.
+            }
+        }
+    }, [route.params?.highlightCategory, pieData]);
 
     const barData = useMemo(() => {
         // Daily totals for the selected month

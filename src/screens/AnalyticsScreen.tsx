@@ -97,11 +97,19 @@ const FilterChip: React.FC<FilterChipProps> = ({ label, icon: Icon, isActive, ac
     );
 };
 
-const AnalyticsScreen = ({ navigation }: any) => {
+const AnalyticsScreen = ({ navigation, route }: any) => {
     const tabBarHeight = useBottomTabBarHeight();
     const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'review'>('all');
     const [segment, setSegment] = useState<'all' | 'business' | 'personal'>('all');
-    const [searchQuery, setSearchQuery] = useState("");
+
+    // Initialize search query from params if available
+    const [searchQuery, setSearchQuery] = useState(route.params?.searchQuery || "");
+
+    useEffect(() => {
+        if (route.params?.searchQuery) {
+            setSearchQuery(route.params.searchQuery);
+        }
+    }, [route.params?.searchQuery]);
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [loading, setLoading] = useState(false);
     const [totals, setTotals] = useState({ today: 0, yesterday: 0 });

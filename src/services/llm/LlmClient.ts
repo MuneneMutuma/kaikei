@@ -1,6 +1,8 @@
+
 import { initLlama, LlamaContext } from 'llama.rn';
 import { ModelManager } from './ModelManager';
 import { getPersonaPrompt } from './PersonaPrompts';
+import { getStructuredAIAdvice, categorizeTransactionRemote } from './HuggingFaceService';
 
 export class LlmClient {
     private static instance: LlmClient;
@@ -29,6 +31,8 @@ export class LlmClient {
             console.log(`LlmClient: Model ready status: ${isReady}`);
 
             if (!isReady) {
+                // If local model is missing, we might need to warn or just rely on cloud if requested.
+                // But for categorizedLocal, we fail.
                 throw new Error("Local Model not downloaded");
             }
 
@@ -52,6 +56,10 @@ export class LlmClient {
         }
     }
 
+    /**
+     * Categorize Transaction (Privacy-First Local Default)
+     * If local fails or is not ready, could fallback to cloud if enabled (future)
+     */
     async categorize(text: string, availableCategories: string[] = [], contextHint?: string): Promise<{ amount?: number, category?: string, description?: string }> {
         console.log("LlmClient: Using Privacy-First Local Inference");
         return this.categorizeLocal(text, availableCategories, contextHint);
@@ -82,35 +90,58 @@ export class LlmClient {
 
     /**
      * Generates structured advice with citations.
-     * Returns: { advice: string, citations: Array<{ type: string, id: string, label: string }> }
+     * Supports switching between Local (Llama) and Cloud (HuggingFace).
      */
-    async generateStructuredAdvice(persona: string, userPrompt: string): Promise<any> {
+    async generateStructuredAdvice(persona: string, userPrompt: string, preferCloud: boolean = false): Promise<any> {
+
+        // 1. CLOUD PATH
+        if (preferCloud) {
+            console.log("LlmClient: Using Cloud Inference (HuggingFace)...");
+            return getStructuredAIAdvice(persona, userPrompt);
+        }
+
+        // 2. LOCAL PATH
+        console.log("LlmClient: Using Local Inference (Llama)...");
         if (!this.context) {
-            await this.init();
+            try {
+                await this.init();
+            } catch (e) {
+                console.warn("LlmClient: Local init failed, falling back to Cloud if possible or fail.");
+                // Optional: Fallback to cloud if local fails? 
+                // For now, let's fail to respect "Local" preference unless we want auto-fallback.
+                // Let's throw to inform UI.
+                throw e;
+            }
         }
         if (!this.context) throw new Error("LLM Context failed to initialize");
 
         const systemPrompt = getPersonaPrompt(persona);
 
-        // Force JSON structure and provide examples
+        // STRICT JSON Schema for Local Model
+        // Simplified for smaller models but explicit about Evidence
         const jsonSchema = `
-        ## Citation Rules:
-        1. For EVERY financial observation, you MUST add a citation in the "citations" array.
-        2. "type" must be "category". 
-        3. "id" must be the EXACT category name (e.g., "Fuel", "Rent", "Groceries").
-        4. "label" should be short and descriptive (e.g., "See Fuel (Ksh 50k)").
-        
-        ## Output Format:
-        JSON ONLY. Example:
+        STRICT RULES:
+        1. Output JSON ONLY.
+        2. Do not invent numbers. Use ONLY numbers provided in the user prompt.
+        3. MANDATORY: You MUST include at least one "citation" in the citations array.
+        4. "citations" must use the EXACT category names from the input.
+
+        Example Input: "Spent 5000 on Fuel"
+        Example Output:
         {
-          "advice": "I noticed your Rent (Ksh 50k) is the main driver...",
+          "advice": "Your Fuel spending of 5000 is high...",
           "citations": [
-            { "type": "category", "id": "Rent", "label": "See Rent (50k)" }
+            { "type": "category", "id": "Fuel", "label": "Fuel: 5000" }
           ]
         }
-
-        ## DATA RULES
-        Do not cite any false data. You MUST use figures that are true from the input both in your advice and in your citations.
+        
+        Format:
+        {
+          "advice": "Your advice text here...",
+          "citations": [
+            { "type": "category", "id": "ExactCategoryName", "label": "Short Verification" }
+          ]
+        }
         `;
 
         const prompt = `<|im_start|>system\n${systemPrompt}\n${jsonSchema}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n{`;
@@ -118,23 +149,20 @@ export class LlmClient {
         try {
             const response = await this.context.completion({
                 prompt: prompt,
-                n_predict: 800, // Increased for detailed advice
-                temperature: 0.7, // Lower for more stable JSON
+                n_predict: 600,
+                temperature: 0.1, // Very low temp for strict adherence
                 stop: ["<|im_end|>", "<|endoftext|>"]
             });
 
-            console.log("LlmClient: Raw Response:", response.text);
+            console.log("LlmClient: Local Raw Response:", response.text);
             const jsonStr = this.extractJson(response.text);
             console.log("LlmClient: Extracted JSON:", jsonStr);
 
             return JSON.parse(jsonStr);
 
         } catch (e) {
-            console.error("LlmClient: Structured Generation failed", e);
-            return {
-                advice: "Failed to generate structured advice. Please try again.",
-                citations: []
-            };
+            console.error("LlmClient: Local Structured Generation failed", e);
+            return null; // Return null so UI knows to not show anything or show error
         }
     }
 
@@ -152,9 +180,9 @@ export class LlmClient {
 
                 const response = await this.context.completion({
                     prompt: prompt,
-                    n_predict: 60,
+                    n_predict: 80,
                     temperature: 0.1,
-                    stop: ["<|im_end|>", "\n\n"]
+                    stop: ["<|im_end|>", "\n\n", "}"] // Stop earlier to save time
                 });
 
                 console.log("LlmClient: Local Result:", response.text);
@@ -192,50 +220,27 @@ export class LlmClient {
 
     private extractJson(output: string): string {
         const trimmed = output.trim();
-        const combined = "{" + output;
+        // If the model didn't start with {, we pre-filled it in the prompt, so we prepend it.
+        // However, if the model repeated the {, we handle that.
+        let combined = trimmed.startsWith('{') ? trimmed : "{" + trimmed;
 
-        // Strategy 1: Try parsing raw (Model ignored prompt suffix and gave full JSON)
-        try {
-            JSON.parse(trimmed);
-            return trimmed;
-        } catch (e) { }
+        // Find first { and last }
+        const first = combined.indexOf('{');
+        const last = combined.lastIndexOf('}');
 
-        // Strategy 2: Try parsing combined (Model respected prompt suffix)
-        try {
-            JSON.parse(combined);
-            return combined;
-        } catch (e) { }
-
-        // Strategy 3: Heuristic Substring on Raw (Find buried JSON)
-        try {
-            const first = trimmed.indexOf('{');
-            const last = trimmed.lastIndexOf('}');
-            if (first !== -1 && last > first) {
-                const sub = trimmed.substring(first, last + 1);
-                JSON.parse(sub);
-                return sub;
-            }
-        } catch (e) { }
-
-        // Strategy 4: Heuristic Substring on Combined
-        try {
-            const first = combined.indexOf('{');
-            const last = combined.lastIndexOf('}');
-            if (first !== -1 && last > first) {
-                const sub = combined.substring(first, last + 1);
-                JSON.parse(sub);
-                return sub;
-            }
-        } catch (e) { }
-
-        // If all fail, return empty object to prevent crash
-        console.warn("LlmClient: JSON extraction failed for all strategies.");
-        return "{}";
+        if (first !== -1 && last !== -1) {
+            return combined.substring(first, last + 1);
+        }
+        return combined;
     }
 
     async release() {
         if (this.context) {
-            await this.context.release();
+            try {
+                await this.context.release();
+            } catch (e) {
+                console.warn("Failed to release context", e);
+            }
             this.context = null;
         }
     }

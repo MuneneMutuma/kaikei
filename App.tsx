@@ -21,6 +21,7 @@ import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import VisualAnalyticsScreen from './src/screens/VisualAnalyticsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AddManualExpenseScreen from './src/screens/AddManualExpenseScreen';
+import AiManagementScreen from './src/screens/AiManagementScreen';
 
 // Icons
 import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart } from 'lucide-react-native';
@@ -37,13 +38,14 @@ export type RootStackParamList = {
   AddManual: undefined; // Manual Entry
   SmartSuggestion: { name: string, count: number };
   Profile: undefined;
+  AiManagement: undefined;
 };
 
 export type MainTabParamList = {
   Home: undefined;
   Analytics: undefined; // Graphs
   Wallet: undefined;
-  Reports: undefined;
+  Insights: undefined;
 };
 
 function MainTabs() {
@@ -96,10 +98,10 @@ function MainTabs() {
       />
 
       <Tab.Screen
-        name="Reports"
+        name="Insights"
         component={AdviceScreen} // Mapped to Advice/Insights
         options={{
-          tabBarLabel: 'Reports',
+          tabBarLabel: 'Insights',
           tabBarIcon: ({ color }) => <BarChart3 size={24} color={color} />
         }}
       />
@@ -215,6 +217,7 @@ export default function App() {
         />
         <Stack.Screen name="SmsReader" component={SmsReaderScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
+        <Stack.Screen name="AiManagement" component={AiManagementScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

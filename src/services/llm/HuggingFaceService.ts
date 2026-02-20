@@ -78,16 +78,19 @@ export const getStructuredAIAdvice = async (
         // Structure rules for JSON output
         const structureNote = `
         IMPORTANT: Your entire response MUST be valid JSON.
-        Match this exactly:
+        
+        ## DATA RULES (CRITICAL):
+        1. Do not cite false data. Use figures that are true from the input only.
+        2. You MUST provide at least one citation in the "citations" array.
+        3. Citations act as "Evidence Pills" in the UI. They must be short.
+
+        Example:
         {
-          "advice": "Full text...",
+          "advice": "You spent 500 on Airtime which is high compared to...",
           "citations": [
-             { "type": "category", "id": "CategoryName", "label": "See Category" }
+             { "type": "category", "id": "Airtime", "label": "Airtime: 500" }
           ]
         }
-        
-        ## DATA RULES:
-        Do not cite false data. Use figures that are true from the input only.
         `;
 
         const response = await client.chatCompletion({

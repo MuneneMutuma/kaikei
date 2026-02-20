@@ -140,7 +140,7 @@ export default function HomeScreen({ navigation }: any) {
         </View>
 
         {/* Smart Insight Card */}
-        <TouchableOpacity style={styles.insightCard} onPress={() => navigation.navigate('Reports')}>
+        <TouchableOpacity style={styles.insightCard} onPress={() => navigation.navigate('Insights')}>
           <View style={styles.insightIcon}>
             <Lightbulb size={24} color="#ea580c" />
           </View>
