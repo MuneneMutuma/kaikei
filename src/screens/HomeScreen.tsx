@@ -224,6 +224,22 @@ export default function HomeScreen({ navigation }: any) {
           </View>
         </View>
 
+        {/* Budget Snapshot Widget */}
+        <TouchableOpacity style={styles.budgetWidget} onPress={() => navigation.navigate('Budgets')}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={[styles.actionIcon, { width: 48, height: 48, backgroundColor: '#f0fdf4', marginBottom: 0, borderWidth: 0 }]}>
+                <Cloud size={24} color={colors.primaryDark} />
+              </View>
+              <View>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0d1b12' }}>My Budgets</Text>
+                <Text style={{ fontSize: 13, color: '#64748b' }}>Set and track category limits</Text>
+              </View>
+            </View>
+            <ChevronRight size={20} color="#94a3b8" />
+          </View>
+        </TouchableOpacity>
+
         {/* Spending Pulse Chart - Only show if there is data */}
         {weeklyData.reduce((acc, item) => acc + (item.value || 0), 0) > 0 && (
           <View style={[styles.chartCard, { marginTop: 8 }]}>
@@ -376,6 +392,9 @@ const styles = StyleSheet.create({
   insightBody: { fontSize: 14, color: '#475569', lineHeight: 20, marginBottom: 12 },
   insightFooter: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   insightAction: { fontSize: 13, fontWeight: '600', color: colors.primary },
+
+  // Budget Widget
+  budgetWidget: { backgroundColor: 'white', marginHorizontal: 20, borderRadius: 16, padding: 16, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 8, elevation: 2, marginBottom: 20 },
 
   // Old styles (kept for mic button mostly)
   actionArea: { paddingHorizontal: 20, paddingBottom: 20 },

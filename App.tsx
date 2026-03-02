@@ -22,9 +22,10 @@ import VisualAnalyticsScreen from './src/screens/VisualAnalyticsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AddManualExpenseScreen from './src/screens/AddManualExpenseScreen';
 import AiManagementScreen from './src/screens/AiManagementScreen';
+import { BudgetScreen } from './src/screens/BudgetScreen';
 
 // Icons
-import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart } from 'lucide-react-native';
+import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart, Target } from 'lucide-react-native';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -44,6 +45,7 @@ export type RootStackParamList = {
 export type MainTabParamList = {
   Home: undefined;
   Analytics: undefined; // Graphs
+  Budgets: undefined;
   Wallet: undefined;
   Insights: undefined;
 };
@@ -85,6 +87,15 @@ function MainTabs() {
         options={{
           tabBarLabel: 'Analytics',
           tabBarIcon: ({ color }) => <PieChart size={24} color={color} />
+        }}
+      />
+
+      <Tab.Screen
+        name="Budgets"
+        component={BudgetScreen}
+        options={{
+          tabBarLabel: 'Budgets',
+          tabBarIcon: ({ color }) => <Target size={24} color={color} />
         }}
       />
 

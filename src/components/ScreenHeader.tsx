@@ -60,7 +60,7 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
 
 const styles = StyleSheet.create({
     container: {
-        paddingHorizontal: 24, // Matched Home
+        paddingHorizontal: 16, // Matched Analytics/Ledger Screen grid
         paddingBottom: 10,
         backgroundColor: colors.background,
     },
