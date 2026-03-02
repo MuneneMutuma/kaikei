@@ -98,6 +98,43 @@ export class Database {
         );
       `);
 
+        // Create Budgets Table
+        db.execute(`
+        CREATE TABLE IF NOT EXISTS budgets (
+          id TEXT PRIMARY KEY NOT NULL,
+          period TEXT NOT NULL,
+          cycleType TEXT NOT NULL DEFAULT 'monthly',
+          totalLimit REAL,
+          UNIQUE(period, cycleType)
+        );
+      `);
+
+        // Create Budget Lines Table
+        db.execute(`
+        CREATE TABLE IF NOT EXISTS budget_lines (
+          id TEXT PRIMARY KEY NOT NULL,
+          budgetId TEXT NOT NULL,
+          categoryId TEXT NOT NULL,
+          limitAmount REAL NOT NULL,
+          FOREIGN KEY(budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
+          FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
+          UNIQUE(budgetId, categoryId)
+        );
+      `);
+
+        // Create Budget Breakdowns Table
+        db.execute(`
+        CREATE TABLE IF NOT EXISTS budget_breakdowns (
+          id TEXT PRIMARY KEY NOT NULL,
+          budgetLineId TEXT NOT NULL,
+          categoryId TEXT NOT NULL,
+          plannedAmount REAL NOT NULL,
+          FOREIGN KEY(budgetLineId) REFERENCES budget_lines(id) ON DELETE CASCADE,
+          FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
+          UNIQUE(budgetLineId, categoryId)
+        );
+      `);
+
         // Create Insights Table
         db.execute(`
         CREATE TABLE IF NOT EXISTS insights (
@@ -139,8 +176,22 @@ export class Database {
         });
 
         // --- Migrations for Existing Databases ---
-        // Check column existence before adding to avoid exceptions
-        // Robust check + Safe catch
+        // 1. Categories Migrations
+        try {
+          const catInfo = db.execute('PRAGMA table_info(categories)');
+          const existingCatCols = new Set<string>();
+          Database.getRows(catInfo).forEach((r: any) => existingCatCols.add(r.name));
+
+          if (!existingCatCols.has('parentId')) {
+            try {
+              db.execute('ALTER TABLE categories ADD COLUMN parentId TEXT DEFAULT NULL');
+            } catch (e) { /* ignore duplicate column error */ }
+          }
+        } catch (e) {
+          console.warn("Categories migration failed", e);
+        }
+
+        // 2. Expenses Migrations
         try {
           const tableInfo = db.execute('PRAGMA table_info(expenses)');
           const existingColumns = new Set<string>();

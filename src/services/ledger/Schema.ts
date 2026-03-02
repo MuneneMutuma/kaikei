@@ -1,5 +1,6 @@
 export interface Category {
     id: string;
+    parentId?: string; // Optional: Links a sub-category to a top-level bucket
     name: string;
     keywords: string[]; // JSON stringified array in DB
     budgetLimit?: number;
@@ -24,6 +25,32 @@ export interface Expense {
     sender?: string;
     recipient?: string;
     account?: string; // e.g. M-Shwari, Pochi, KCB
+}
+
+export interface Budget {
+    id: string;
+    period: string; // "YYYY-MM" for monthly, or a standard start date string for weekly/daily 
+    cycleType: 'monthly' | 'weekly' | 'daily';
+    totalLimit?: number; // Optional overall cap
+}
+
+export interface BudgetLine {
+    id: string;
+    budgetId: string;
+    categoryId: string;
+    limitAmount: number;
+    // For UI convenience in joined queries:
+    categoryName?: string;
+    spentAmount?: number;
+}
+
+export interface BudgetBreakdown {
+    id: string;
+    budgetLineId: string; // FK to budget_lines
+    categoryId: string;   // FK to categories (the sub-category)
+    plannedAmount: number;
+    // For UI convenience
+    categoryName?: string;
 }
 
 export const DEFAULT_CATEGORIES: Omit<Category, 'id'>[] = [
