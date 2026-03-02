@@ -167,7 +167,8 @@ export class ExpenseRepository {
             return {
                 ...row,
                 keywords: JSON.parse(row.keywords),
-                isCustom: !!row.isCustom
+                isCustom: !!row.isCustom,
+                parentId: row.parentId || undefined
             };
         }
         return null;
@@ -181,17 +182,18 @@ export class ExpenseRepository {
         return Database.getRows(result).map(row => ({
             ...row,
             keywords: JSON.parse(row.keywords),
-            isCustom: !!row.isCustom
+            isCustom: !!row.isCustom,
+            parentId: row.parentId || undefined
         }));
     }
 
-    public async addCategory(name: string, keywords: string[] = [], budgetLimit?: number, isCustom: boolean = true): Promise<Category> {
+    public async addCategory(name: string, keywords: string[] = [], budgetLimit?: number, isCustom: boolean = true, parentId?: string): Promise<Category> {
         const id = uuidv4();
         const keywordsStr = JSON.stringify(keywords);
 
         await this.db.execute(
-            `INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)`,
-            [id, name, keywordsStr, budgetLimit || null, isCustom ? 1 : 0]
+            `INSERT INTO categories (id, name, keywords, budgetLimit, isCustom, parentId) VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, name, keywordsStr, budgetLimit || null, isCustom ? 1 : 0, parentId || null]
         );
 
         return {
@@ -199,7 +201,8 @@ export class ExpenseRepository {
             name,
             keywords,
             budgetLimit,
-            isCustom
+            isCustom,
+            parentId
         };
     }
 
