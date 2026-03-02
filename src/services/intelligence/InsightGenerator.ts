@@ -3,6 +3,7 @@ import { Expense } from "../ledger/Schema";
 import { LlmClient } from "../llm/LlmClient";
 import { SettingsRepository } from "../settings/SettingsRepository";
 import { InsightRepository } from "./InsightRepository";
+import { BudgetRepository } from "../ledger/BudgetRepository";
 
 export type InsightType = 'alert' | 'opportunity' | 'success' | 'info';
 
@@ -33,11 +34,13 @@ export class InsightGenerator {
     private repo: ExpenseRepository;
     private settings: SettingsRepository;
     private insightRepo: InsightRepository;
+    private budgetRepo: BudgetRepository;
 
     constructor() {
         this.repo = new ExpenseRepository();
         this.settings = new SettingsRepository();
         this.insightRepo = new InsightRepository();
+        this.budgetRepo = new BudgetRepository();
     }
 
     /**
@@ -47,6 +50,7 @@ export class InsightGenerator {
         // Run checks
         await this.generateMonthlyInsights();
         await this.generateDailyInsights();
+        await this.generateBudgetInsights();
 
         // Return ALL active insights from DB
         return this.insightRepo.getActiveInsights();
@@ -149,6 +153,61 @@ export class InsightGenerator {
     }
 
     /**
+     * Budget Analysis (Real-time Feedback)
+     * Checks if current month expenses exceed active budget limits.
+     */
+    async generateBudgetInsights(): Promise<void> {
+        const generated: Insight[] = [];
+        const now = new Date();
+        const currentMonthIso = this.toMonthStr(now);
+
+        const budgets = await this.budgetRepo.getMonthlyBudgetDashboard(currentMonthIso);
+
+        for (const b of budgets) {
+            const safeSpent = b.spentAmount || 0;
+            const limit = b.limitAmount;
+
+            if (limit <= 0) continue;
+
+            const percentage = safeSpent / limit;
+
+            if (percentage >= 1.0) {
+                const id = `budget-breach-${b.categoryId}-${currentMonthIso}`;
+                if (!(await this.insightRepo.exists(id))) {
+                    generated.push({
+                        id,
+                        type: 'alert',
+                        title: `${b.categoryName} Over Budget`,
+                        description: `You have exceeded your ${b.categoryName} limit of ${limit.toLocaleString()}.`,
+                        metric: `>100%`,
+                        icon: 'AlertCircle',
+                        score: 10,
+                        source: 'rule',
+                    });
+                }
+            } else if (percentage >= 0.8) {
+                const id = `budget-warn-${b.categoryId}-${currentMonthIso}`;
+                if (!(await this.insightRepo.exists(id))) {
+                    generated.push({
+                        id,
+                        type: 'alert',
+                        title: `${b.categoryName} Budget Warning`,
+                        description: `You have used ${Math.round(percentage * 100)}% of your ${b.categoryName} budget.`,
+                        metric: `${Math.round(percentage * 100)}%`,
+                        icon: 'AlertTriangle',
+                        score: 7,
+                        source: 'rule',
+                    });
+                }
+            }
+        }
+
+        for (const insight of generated) {
+            await this.insightRepo.saveInsight(insight);
+        }
+    }
+
+    /**
      * 3. User Initiated (Force LLM)
      * Triggered by FAB. Forces a fresh analysis using the preferred model (Local/Cloud).
      */
@@ -163,13 +222,22 @@ export class InsightGenerator {
             const currentExpenses = await this.repo.getExpensesByMonth(currentMonthIso);
             const currentTotal = currentExpenses.reduce((sum, e) => sum + e.amount, 0);
 
+            // Gather Budget Context
+            const budgets = await this.budgetRepo.getMonthlyBudgetDashboard(currentMonthIso);
+            const budgetContext = budgets.map(b =>
+                `${b.categoryName}: Spent ${(b.spentAmount || 0).toLocaleString()} of ${b.limitAmount.toLocaleString()} limit`
+            ).join('\n');
+
             // Build Prompt
             const prompt = `
             Analyze these spending totals for ${currentMonthIso}:
             Total: ${currentTotal}
             Top Categories: ${this.getTopCategories(currentExpenses)}
             
-            Based on the persona "${persona}", give one specific, actionable piece of advice to optimize spending or save money.
+            Current Budgets:
+            ${budgetContext || 'No budgets set.'}
+            
+            Based on the persona "${persona}", give one specific, actionable piece of advice to optimize spending or stay within budget.
             Keep it under 2 sentences.
             `;
 
