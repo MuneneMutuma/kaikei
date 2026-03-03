@@ -20,7 +20,7 @@ interface BudgetCategoryCardProps {
 }
 
 export const BudgetCategoryCard: React.FC<BudgetCategoryCardProps> = ({ budget, onPress }) => {
-    const { categoryName, limitAmount, spentAmount = 0 } = budget;
+    const { categoryName, limitAmount, spentAmount = 0, isUnplanned } = budget;
     const progressWidth = useSharedValue(0);
 
     const safeSpent = Math.max(0, spentAmount);
@@ -100,16 +100,26 @@ export const BudgetCategoryCard: React.FC<BudgetCategoryCardProps> = ({ budget, 
 
                         <View style={styles.amountsRow}>
                             <Text style={styles.spentText}>{formatKes(safeSpent)}</Text>
-                            <Text style={styles.limitText}>of {formatKes(limitAmount)}</Text>
-                            <Text style={[styles.statusText, percentageRaw >= 100 && { color: colors.danger, fontWeight: 'bold' }]}>
-                                • {percentageRaw >= 100 ? 'Over' : `${Math.round(percentageRaw)}%`}
-                            </Text>
+                            {!isUnplanned ? (
+                                <>
+                                    <Text style={styles.limitText}>of {formatKes(limitAmount)}</Text>
+                                    <Text style={[styles.statusText, percentageRaw >= 100 && { color: colors.danger, fontWeight: 'bold' }]}>
+                                        • {percentageRaw >= 100 ? 'Over' : `${Math.round(percentageRaw)}%`}
+                                    </Text>
+                                </>
+                            ) : (
+                                <View style={styles.unplannedBadge}>
+                                    <Text style={styles.unplannedBadgeText}>UNPLANNED ACTIVITY</Text>
+                                </View>
+                            )}
                         </View>
 
-                        {/* Integrated Progress bar */}
-                        <View style={[styles.progressBarContainer, { marginTop: 6, height: 3 }]}>
-                            <Animated.View style={[styles.progressBarFill, animatedProgressStyle]} />
-                        </View>
+                        {/* Integrated Progress bar - Only for planned */}
+                        {!isUnplanned && (
+                            <View style={[styles.progressBarContainer, { marginTop: 6, height: 3 }]}>
+                                <Animated.View style={[styles.progressBarFill, animatedProgressStyle]} />
+                            </View>
+                        )}
                     </View>
                 </Pressable>
 
@@ -155,7 +165,7 @@ export const BudgetCategoryCard: React.FC<BudgetCategoryCardProps> = ({ budget, 
                                             ]}
                                         >
                                             <View style={styles.breakdownLabelGroup}>
-                                                <Text style={styles.breakdownLabel}>{item.categoryName}</Text>
+                                                <Text style={styles.breakdownLabel}>{item.itemName}</Text>
                                             </View>
                                             <Text style={styles.breakdownValue}>{formatKes(item.plannedAmount)}</Text>
                                         </View>
@@ -232,6 +242,19 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 3,
+    },
+    unplannedBadge: {
+        backgroundColor: '#F1F5F9',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        marginLeft: 4,
+    },
+    unplannedBadgeText: {
+        fontSize: 9,
+        fontWeight: '800',
+        color: colors.textSecondary,
+        letterSpacing: 0.5,
     },
     categoryName: {
         fontSize: 15,

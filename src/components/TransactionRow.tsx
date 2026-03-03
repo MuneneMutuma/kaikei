@@ -55,11 +55,14 @@ export const TransactionRow: React.FC<TransactionRowProps> = ({ item, onPress, s
             {/* Content Column */}
             <View style={styles.contentCol}>
                 <Text style={styles.title} numberOfLines={1}>
-                    {item.description.replace(/^(paid to|received from)\s+/i, '').trim()}
+                    {item.description.replace(/\[.*\]/, '').replace(/^(paid to|received from)\s+/i, '').trim() || item.recipient || item.sender || "Unknown"}
                 </Text>
                 <View style={styles.metaRow}>
                     <Text style={styles.subtitle}>
-                        {timeLabel} • {item.categoryName}{sourceContext}
+                        {timeLabel} • {item.categoryName}{(() => {
+                            const breakdownMatch = item.description.match(/\[(.*?)\]/);
+                            return breakdownMatch ? ` • ${breakdownMatch[1]}` : '';
+                        })()}{sourceContext}
                     </Text>
                 </View>
             </View>

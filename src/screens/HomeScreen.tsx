@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, Image, TouchableOpacity, StatusBar, ScrollView, Animated, RefreshControl, Dimensions
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Settings, Cloud, Zap, ArrowRight, Mic, Plus, ArrowLeftRight, TrendingUp, Wallet, Lightbulb, ChevronRight, CheckCircle, BarChart3, Sparkles, RefreshCw, Bike, GraduationCap, Briefcase, ShoppingBasket } from 'lucide-react-native';
+import { Settings, Cloud, Zap, ArrowRight, Mic, Plus, TrendingUp, Wallet, Lightbulb, ChevronRight, ChevronLeft, CheckCircle, BarChart3, Sparkles, RefreshCw, Bike, GraduationCap, Briefcase, ShoppingBasket } from 'lucide-react-native';
 import { BarChart } from 'react-native-gifted-charts';
 import { colors } from "../theme/colors";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
@@ -11,7 +11,8 @@ import { SettingsRepository } from "../services/settings/SettingsRepository";
 import { InsightRepository } from "../services/intelligence/InsightRepository";
 import { Insight } from "../services/intelligence/InsightGenerator";
 import { IngestionEvents, INGESTION_EVENT } from "../services/ingestion/IngestionEvents";
-import { Expense } from "../services/ledger/Schema";
+import { Expense, BudgetLine } from "../services/ledger/Schema";
+import { BudgetRepository } from "../services/ledger/BudgetRepository";
 
 // Helper to format date relative (Today, Yesterday, etc)
 const formatRelativeDate = (dateStr: string) => {
@@ -41,6 +42,7 @@ export default function HomeScreen({ navigation }: any) {
   const [weeklyData, setWeeklyData] = useState<any[]>([]);
   const [latestInsight, setLatestInsight] = useState<Insight | null>(null);
   const [recentExpenses, setRecentExpenses] = useState<Expense[]>([]);
+  const [topBudgets, setTopBudgets] = useState<BudgetLine[]>([]);
 
   // Animation for large mic button
   const scale = useRef(new Animated.Value(1)).current;
@@ -50,6 +52,7 @@ export default function HomeScreen({ navigation }: any) {
     const settingsRepo = new SettingsRepository();
     const expenseRepo = new ExpenseRepository();
     const insightRepo = new InsightRepository();
+    const budgetRepo = new BudgetRepository();
 
     try {
       // Load Profile
@@ -57,11 +60,10 @@ export default function HomeScreen({ navigation }: any) {
       setUserName(profile.userName || "Kamau");
       setUserPersona(profile.userPersona?.toLowerCase() || "student");
 
-      // Load Recent Activity (today)
+      const todayIso = new Date().toISOString().slice(0, 7);
+      const monthExpenses = await expenseRepo.getExpensesByMonth(todayIso);
       const now = new Date();
       const todayStr = now.toISOString().split('T')[0];
-
-      const monthExpenses = await expenseRepo.getExpensesByMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
       const todayTotal = monthExpenses
         .filter(e => e.date.startsWith(todayStr) && e.type === 'expense')
         .reduce((acc, curr) => acc + curr.amount, 0);
@@ -112,6 +114,18 @@ export default function HomeScreen({ navigation }: any) {
       const recent = await expenseRepo.getRecentExpenses(3);
       setRecentExpenses(recent);
 
+      // Load Top Budgets
+      const dashboard = await budgetRepo.getMonthlyBudgetDashboard(todayIso);
+      const activeWithLimits = dashboard
+        .filter(b => b.limitAmount > 0)
+        .sort((a, b) => {
+          const ratioA = (a.spentAmount || 0) / a.limitAmount;
+          const ratioB = (b.spentAmount || 0) / b.limitAmount;
+          return ratioB - ratioA; // Most utilized first
+        })
+        .slice(0, 3);
+      setTopBudgets(activeWithLimits);
+
     } catch (e) {
       console.error("Home Load Error", e);
     } finally {
@@ -123,8 +137,6 @@ export default function HomeScreen({ navigation }: any) {
     useCallback(() => {
       fetchData();
       StatusBar.setBarStyle('dark-content');
-      StatusBar.setBackgroundColor('transparent');
-      StatusBar.setTranslucent(true);
     }, [fetchData])
   );
 
@@ -226,18 +238,38 @@ export default function HomeScreen({ navigation }: any) {
 
         {/* Budget Snapshot Widget */}
         <TouchableOpacity style={styles.budgetWidget} onPress={() => navigation.navigate('Budgets')}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: topBudgets.length > 0 ? 12 : 0 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <View style={[styles.actionIcon, { width: 48, height: 48, backgroundColor: '#f0fdf4', marginBottom: 0, borderWidth: 0 }]}>
                 <Cloud size={24} color={colors.primaryDark} />
               </View>
               <View>
-                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0d1b12' }}>My Budgets</Text>
-                <Text style={{ fontSize: 13, color: '#64748b' }}>Set and track category limits</Text>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0d1b12' }}>Budget Snapshot</Text>
+                <Text style={{ fontSize: 13, color: '#64748b' }}>
+                  {topBudgets.length > 0 ? 'Tracking your spending limits' : 'Set limits to start tracking'}
+                </Text>
               </View>
             </View>
             <ChevronRight size={20} color="#94a3b8" />
           </View>
+
+          {topBudgets.map((b) => {
+            const ratio = Math.min(1, (b.spentAmount || 0) / (b.limitAmount || 1));
+            const color = ratio >= 1 ? colors.danger : ratio >= 0.8 ? colors.warning : colors.primary;
+            return (
+              <View key={b.categoryId} style={{ marginTop: 10 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: colors.text }}>{b.categoryName}</Text>
+                  <Text style={{ fontSize: 11, color: colors.textSecondary }}>
+                    {Math.round(ratio * 100)}%
+                  </Text>
+                </View>
+                <View style={{ height: 4, backgroundColor: '#f1f5f9', borderRadius: 2, overflow: 'hidden' }}>
+                  <View style={{ width: `${ratio * 100}%`, height: '100%', backgroundColor: color }} />
+                </View>
+              </View>
+            );
+          })}
         </TouchableOpacity>
 
         {/* Spending Pulse Chart - Only show if there is data */}
@@ -325,8 +357,15 @@ export default function HomeScreen({ navigation }: any) {
                   <Wallet size={20} color={colors.primaryDark} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.recentTitle} numberOfLines={1}>{expense.description || expense.recipient || "Unknown"}</Text>
-                  <Text style={styles.recentDate}>{formatRelativeDate(expense.date)}</Text>
+                  <Text style={styles.recentTitle} numberOfLines={1}>
+                    {expense.description.replace(/\[.*\]/, '').replace(/^(paid to|received from)\s+/i, '').trim() || expense.recipient || expense.sender || expense.categoryName || "Manual Entry"}
+                  </Text>
+                  <Text style={styles.recentDate}>
+                    {formatRelativeDate(expense.date)} • {expense.categoryName}{(() => {
+                      const breakdownMatch = expense.description.match(/\[(.*?)\]/);
+                      return breakdownMatch ? ` • ${breakdownMatch[1]}` : '';
+                    })()}
+                  </Text>
                 </View>
                 <Text style={[styles.recentAmount, { color: expense.type === 'income' ? colors.success : '#0d1b12' }]}>
                   {expense.type === 'income' ? '+' : '-'} {expense.amount.toLocaleString()}
@@ -370,7 +409,6 @@ const styles = StyleSheet.create({
   // Chart Card
   chartCard: { backgroundColor: 'white', marginHorizontal: 20, borderRadius: 16, padding: 16, marginBottom: 20, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 8, elevation: 2 },
   chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
-  chartTitle: { fontSize: 16, fontWeight: 'bold', color: '#0d1b12' },
   chartTitle: { fontSize: 16, fontWeight: 'bold', color: '#0d1b12' },
   chartSubtitle: { fontSize: 12, color: '#64748b' },
   chartAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 16, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#f1f5f9' },
@@ -439,4 +477,7 @@ const styles = StyleSheet.create({
   recentTitle: { fontSize: 14, fontWeight: '600', color: '#0d1b12' },
   recentDate: { fontSize: 12, color: '#64748b', marginTop: 2 },
   recentAmount: { fontSize: 14, fontWeight: 'bold' },
+  monthSubtitle: { fontSize: 12, color: '#64748b', marginTop: 2 },
+  monthNav: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  navIcon: { padding: 4, backgroundColor: '#f0fdf4', borderRadius: 8 }
 });

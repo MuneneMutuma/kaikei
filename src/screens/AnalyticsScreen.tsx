@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
     View, Text, StyleSheet, SectionList, TouchableOpacity, TextInput, ActivityIndicator, StatusBar, Image
 } from "react-native";
+import { MonthPicker } from '../components/MonthPicker';
 import { colors } from "../theme/colors";
 import { ScreenHeader } from "../components/ScreenHeader";
 import { TransactionRow } from "../components/TransactionRow";
@@ -101,6 +102,7 @@ const AnalyticsScreen = ({ navigation, route }: any) => {
     const tabBarHeight = useBottomTabBarHeight();
     const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'review'>('all');
     const [segment, setSegment] = useState<'all' | 'business' | 'personal'>('all');
+    const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7));
 
     // Initialize search query from params if available
     const [searchQuery, setSearchQuery] = useState(route.params?.searchQuery || "");
@@ -117,12 +119,7 @@ const AnalyticsScreen = ({ navigation, route }: any) => {
     const loadData = async () => {
         setLoading(true);
         const repo = new ExpenseRepository();
-        // Load extensive history for searching
-        // In real app, implement pagination or search query on Repo
-        const now = new Date();
-        const start = new Date(now.getFullYear(), now.getMonth() - 2, 1); // Last 2 months
-        // This is a naive load-all for UI demo; optimize for prod
-        const all = await repo.getExpensesByMonth(now.toISOString().slice(0, 7));
+        const all = await repo.getExpensesByMonth(currentMonth);
         // Note: repo.getExpensesByMonth expects 'YYYY-MM'
 
         // Let's actually get all expenses from recent months to show list
@@ -136,8 +133,16 @@ const AnalyticsScreen = ({ navigation, route }: any) => {
     useFocusEffect(
         React.useCallback(() => {
             loadData();
-        }, [])
+        }, [currentMonth])
     );
+
+    // Removed changeMonth function
+
+    const formatMonthReadable = (isoMonth: string) => {
+        const [y, m] = isoMonth.split('-').map(Number);
+        const date = new Date(y, m - 1, 1);
+        return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    };
 
     // Filtering & Grouping
     const sections = useMemo(() => {
@@ -185,8 +190,14 @@ const AnalyticsScreen = ({ navigation, route }: any) => {
         <View style={{ backgroundColor: colors.background, paddingBottom: 10 }}>
             <ScreenHeader
                 title="Transaction Ledger"
-                subtitle="All History"
+                subtitle="Monthly Activity"
                 showNotification={false}
+            />
+
+            <MonthPicker
+                currentMonth={currentMonth}
+                onMonthChange={setCurrentMonth}
+                maxMonth={new Date().toISOString().slice(0, 7)}
             />
 
             {/* Search Bar */}
@@ -585,7 +596,8 @@ const styles = StyleSheet.create({
         elevation: 6,
         borderWidth: 4,
         borderColor: '#FFF'
-    }
+    },
+    // Removed monthNav, navBtn, monthText styles
 });
 
 export default AnalyticsScreen;

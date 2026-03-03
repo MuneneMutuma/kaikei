@@ -14,6 +14,7 @@ import {
   NativeEventEmitter,
   BackHandler
 } from "react-native";
+import { v4 as uuidv4 } from 'uuid';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { View as MotiView, AnimatePresence } from 'moti';
@@ -28,9 +29,10 @@ const voiceEmitter = new NativeEventEmitter(VoiceModule);
 import AmountStep from "./AmountStep";
 import CategoryStep, { getCategoryColor, getCategoryIcon } from "./CategoryStep";
 import NoteStep from "./NoteStep";
-import { Category } from "../services/ledger/Schema";
+import { Category, BudgetBreakdown } from "../services/ledger/Schema";
 
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { BudgetRepository } from "../services/ledger/BudgetRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
@@ -55,6 +57,14 @@ const AddExpenseScreen: React.FC = () => {
 
   // UI State
   const [saving, setSaving] = useState(false);
+
+  // Transaction Splitting State
+  const [isSplit, setIsSplit] = useState(false);
+  const [splits, setSplits] = useState<{ categoryId: string, categoryName: string, amount: string, budgetBreakdownId?: string }[]>([]);
+
+  // Budget Bucket State
+  const [availableBreakdowns, setAvailableBreakdowns] = useState<BudgetBreakdown[]>([]);
+  const [selectedBreakdownId, setSelectedBreakdownId] = useState<string | null>(null);
 
   // --- LOAD DATA ---
   useEffect(() => {
@@ -105,6 +115,29 @@ const AddExpenseScreen: React.FC = () => {
       backHandler.remove();
     };
   }, [step]);
+
+  useEffect(() => {
+    const loadBreakdowns = async () => {
+      if (selectedCategory) {
+        const budgetRepo = new BudgetRepository();
+        const currentMonthIso = new Date().toISOString().slice(0, 7);
+        try {
+          const dashboard = await budgetRepo.getMonthlyBudgetDashboard(currentMonthIso);
+          const line = dashboard.find(b => b.categoryId === selectedCategory.id);
+          if (line) {
+            const brks = await budgetRepo.getBudgetBreakdowns(line.id);
+            setAvailableBreakdowns(brks);
+          } else {
+            setAvailableBreakdowns([]);
+            setSelectedBreakdownId(null);
+          }
+        } catch (e) {
+          console.error("Failed to load breakdowns", e);
+        }
+      }
+    };
+    loadBreakdowns();
+  }, [selectedCategory]);
 
   const requestMicrophonePermission = async () => {
     if (Platform.OS === 'android') {
@@ -199,19 +232,70 @@ const AddExpenseScreen: React.FC = () => {
   // --- SAVE LOGIC ---
   const saveExpense = async () => {
     if (!amount || !selectedCategory) return;
-    setSaving(true);
+    setSaving(false); // Initialize but don't set true until checks pass
+
     try {
       const finalAmount = parseFloat(amount);
       const date = new Date().toISOString();
-      await repo.current.addExpense({
-        amount: finalAmount,
-        date: date,
-        description: note.trim() || selectedCategory.name,
-        categoryId: selectedCategory.id,
-        source: 'manual',
-        rawText: '',
-        type: 'expense'
-      });
+      const currentMonth = date.slice(0, 7);
+
+      // --- Budget Threshold Check ---
+      const budgetRepo = new BudgetRepository();
+      const dashboard = await budgetRepo.getMonthlyBudgetDashboard(currentMonth);
+      const budgetLine = dashboard.find(b => b.categoryId === selectedCategory.id);
+
+      if (budgetLine && budgetLine.limitAmount > 0) {
+        const currentSpent = budgetLine.spentAmount || 0;
+        const totalAfterThis = currentSpent + finalAmount;
+
+        if (totalAfterThis > budgetLine.limitAmount) {
+          const overBy = totalAfterThis - budgetLine.limitAmount;
+          const confirmSave = await new Promise((resolve) => {
+            Alert.alert(
+              "Budget Exceeded",
+              `This expense will put you over your ${selectedCategory.name} budget by KES ${overBy.toLocaleString()}.\n\nDo you still want to save it?`,
+              [
+                { text: "Cancel", onPress: () => resolve(false), style: "cancel" },
+                { text: "Save Anyway", onPress: () => resolve(true), style: "destructive" }
+              ]
+            );
+          });
+
+          if (!confirmSave) return;
+        }
+      }
+
+      setSaving(true);
+
+      if (isSplit && splits.length > 0) {
+        // Handle Atomic Split
+        const splitEntities = splits.map(s => ({
+          amount: parseFloat(s.amount) || 0,
+          date: date,
+          description: note.trim() || s.categoryName,
+          categoryId: s.categoryId,
+          source: 'manual' as const,
+          rawText: '',
+          type: 'expense' as const,
+          isBusiness: false,
+          budgetBreakdownId: s.budgetBreakdownId || undefined,
+          parentId: uuidv4() // Generate a common parentId for this group
+        }));
+        await repo.current.addSplitExpenses(splitEntities);
+      } else {
+        // Handle Single Entry
+        await repo.current.addExpense({
+          amount: finalAmount,
+          date: date,
+          description: note.trim() || selectedCategory.id,
+          categoryId: selectedCategory.id,
+          source: 'manual',
+          rawText: '',
+          type: 'expense',
+          isBusiness: false,
+          budgetBreakdownId: selectedBreakdownId || undefined
+        });
+      }
       navigation.goBack();
     } catch (e) {
       console.error("Failed to save", e);
@@ -306,6 +390,16 @@ const AddExpenseScreen: React.FC = () => {
               setAmount={setAmount}
               onNext={() => setStep(3)}
             />
+            {/* Split Toggle at Step 2 */}
+            <TouchableOpacity
+              style={[styles.splitEntryBtn, isSplit && styles.splitEntryBtnActive]}
+              onPress={() => setIsSplit(!isSplit)}
+            >
+              <Plus size={16} color={isSplit ? '#fff' : colors.primary} style={{ marginRight: 8 }} />
+              <Text style={[styles.splitEntryText, isSplit && { color: '#fff' }]}>
+                {isSplit ? "Splitting Enabled" : "Split this transaction"}
+              </Text>
+            </TouchableOpacity>
           </MotiView>
         )}
 
@@ -318,13 +412,19 @@ const AddExpenseScreen: React.FC = () => {
             <NoteStep
               note={note}
               setNote={setNote}
-              onEditCategory={() => setStep(1)}
               onEditAmount={() => setStep(2)}
               summary={{
                 amount,
                 categoryName: selectedCategory?.name || '',
                 categoryColor: selectedCategory ? getCategoryColor(selectedCategory.name) : colors.primary
               }}
+              isSplit={isSplit}
+              splits={splits}
+              setSplits={setSplits}
+              dbCategories={dbCategories}
+              availableBreakdowns={availableBreakdowns}
+              selectedBreakdownId={selectedBreakdownId}
+              onSelectBreakdown={setSelectedBreakdownId}
             />
           </MotiView>
         )}
@@ -561,6 +661,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 16
+  },
+  splitEntryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: '#f0fdf4'
+  },
+  splitEntryBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary
+  },
+  splitEntryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary
   }
 });
 

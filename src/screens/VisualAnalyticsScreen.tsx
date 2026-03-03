@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight, TrendingUp, X, ShoppingBag, Calendar, Eye, E
 import { getCategoryIcon, getCategoryColor } from './AnalyticsScreen';
 import { TransactionRow } from '../components/TransactionRow';
 import { TransactionDetailModal } from '../components/TransactionDetailModal';
+import { MonthPicker } from '../components/MonthPicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const screenWidth = Dimensions.get('window').width;
@@ -20,7 +21,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
     const [segment, setSegment] = useState<'all' | 'business' | 'personal'>('all');
 
     // Time Navigation State
-    const [selectedMonth, setSelectedMonth] = useState(new Date()); // Default to now
+    const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7));
 
     // Interaction State
     const [selectedCategory, setSelectedCategory] = useState<{ name: string, value: number, color: string } | null>(null);
@@ -52,42 +53,38 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
 
     // --- Helpers ---
 
-    const goToPrevMonth = () => {
-        const newDate = new Date(selectedMonth);
-        newDate.setMonth(newDate.getMonth() - 1);
-        setSelectedMonth(newDate);
-        setSelectedCategory(null); // Reset selection
-    };
 
     const goToNextMonth = () => {
-        const newDate = new Date(selectedMonth);
-        newDate.setMonth(newDate.getMonth() + 1);
+        const [year, month] = currentMonth.split('-').map(Number);
+        const date = new Date(year, month, 1);
 
         // Constraint: Don't go past current month
         const now = new Date();
-        if (newDate > now && newDate.getMonth() !== now.getMonth()) return;
+        if (date > now && date.getMonth() !== now.getMonth()) return;
 
-        setSelectedMonth(newDate);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        setCurrentMonth(`${y}-${m}`);
         setSelectedCategory(null);
     };
 
     const monthLabel = useMemo(() => {
-        return selectedMonth.toLocaleDateString('default', { month: 'long', year: 'numeric' });
-    }, [selectedMonth]);
+        const [y, m] = currentMonth.split('-').map(Number);
+        return new Date(y, m - 1, 1).toLocaleDateString('default', { month: 'long', year: 'numeric' });
+    }, [currentMonth]);
 
-    // Check if next month is future
     const isNextDisabled = useMemo(() => {
         const now = new Date();
-        const next = new Date(selectedMonth);
-        next.setMonth(next.getMonth() + 1);
+        const [year, month] = currentMonth.split('-').map(Number);
+        const next = new Date(year, month, 1);
         return next > now && next.getMonth() !== now.getMonth();
-    }, [selectedMonth]);
+    }, [currentMonth]);
 
     // --- Data Processing ---
 
     const filteredExpenses = useMemo(() => {
-        const year = selectedMonth.getFullYear();
-        const month = selectedMonth.getMonth();
+        const [year, month0] = currentMonth.split('-').map(Number);
+        const month = month0 - 1;
 
         return expenses.filter(e => {
             if (e.type !== 'expense') return false;
@@ -99,7 +96,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
             const d = new Date(e.date);
             return d.getFullYear() === year && d.getMonth() === month;
         });
-    }, [expenses, selectedMonth, segment]);
+    }, [expenses, currentMonth, segment]);
 
     const totalSpend = useMemo(() => filteredExpenses.reduce((sum, e) => sum + e.amount, 0), [filteredExpenses]);
 
@@ -160,13 +157,14 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
 
     const barData = useMemo(() => {
         // Daily totals for the selected month
-        const daysInMonth = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0).getDate();
+        const [year, month0] = currentMonth.split('-').map(Number);
+        const daysInMonth = new Date(year, month0, 0).getDate();
         const dailyTotals: { [key: string]: number } = {};
         const dailyItems: { [key: string]: Expense[] } = {};
 
         // Initialize all days
         for (let i = 1; i <= daysInMonth; i++) {
-            const dateStr = `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+            const dateStr = `${year}-${String(month0).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
             dailyTotals[dateStr] = 0;
             dailyItems[dateStr] = [];
         }
@@ -197,7 +195,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
                 }
             };
         });
-    }, [filteredExpenses, selectedMonth]);
+    }, [filteredExpenses, currentMonth]);
 
 
     // --- Render Helpers ---
@@ -244,25 +242,11 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
         <View style={styles.container}>
             <ScreenHeader title="Analytics" subtitle="Spending Breakdown" showNotification={false} compact={true} />
 
-            {/* Month Navigation - Sticky */}
-            <View style={[styles.navRow, { marginTop: 0, marginBottom: 8 }]}>
-                <TouchableOpacity onPress={goToPrevMonth} style={styles.navBtn}>
-                    <ChevronLeft size={24} color="#0d1b12" />
-                </TouchableOpacity>
-
-                <View style={styles.dateDisplay}>
-                    <Calendar size={16} color={colors.primary} style={{ marginRight: 8 }} />
-                    <Text style={styles.dateText}>{monthLabel}</Text>
-                </View>
-
-                <TouchableOpacity
-                    onPress={goToNextMonth}
-                    style={[styles.navBtn, isNextDisabled && { opacity: 0.3 }]}
-                    disabled={isNextDisabled}
-                >
-                    <ChevronRight size={24} color="#0d1b12" />
-                </TouchableOpacity>
-            </View>
+            <MonthPicker
+                currentMonth={currentMonth}
+                onMonthChange={setCurrentMonth}
+                maxMonth={new Date().toISOString().slice(0, 7)}
+            />
 
             {/* Segment Control */}
             <View style={styles.segmentContainer}>
@@ -355,7 +339,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
                     <Text style={styles.chartSubtitle}>Scroll to view full month • Tap bars for details</Text>
                     <View style={{ paddingVertical: 16 }}>
                         <BarChart
-                            key={selectedMonth.toISOString()}
+                            key={currentMonth}
                             data={barData}
                             barWidth={22}
                             spacing={14}
