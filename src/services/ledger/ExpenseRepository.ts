@@ -18,8 +18,8 @@ export class ExpenseRepository {
         // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
         const result = await this.db.execute(
             `INSERT OR IGNORE INTO expenses (
-                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness, parentId, budgetBreakdownId, tagId
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 id,
                 expense.amount,
@@ -35,7 +35,10 @@ export class ExpenseRepository {
                 expense.recipient || null,
                 isVerified ? 1 : 0,
                 0,
-                isBusiness ? 1 : 0
+                isBusiness ? 1 : 0,
+                expense.parentId || null,
+                expense.budgetBreakdownId || null,
+                expense.tagId || null
             ]
         );
 
@@ -60,13 +63,56 @@ export class ExpenseRepository {
             recipient: expense.recipient || undefined,
             isVerified,
             synced: false,
-            isBusiness
+            isBusiness,
+            parentId: expense.parentId || undefined,
+            budgetBreakdownId: expense.budgetBreakdownId || undefined,
+            tagId: expense.tagId || undefined
         };
 
         return newExpense;
     }
 
+    /**
+     * Add multiple split expenses atomically
+     */
+    public async addSplitExpenses(splits: (Omit<Expense, 'id' | 'synced'> | Omit<Expense, 'id' | 'synced' | 'isVerified'>)[]): Promise<Expense[]> {
+        const results: Expense[] = [];
+        // @ts-ignore
+        const db = this.db;
+        db.execute('BEGIN TRANSACTION');
+        try {
+            for (const split of splits) {
+                const added = await this.addExpense(split);
+                results.push(added);
+            }
+            db.execute('COMMIT');
+        } catch (e) {
+            db.execute('ROLLBACK');
+            throw e;
+        }
+        return results;
+    }
 
+    /**
+     * Get all splits for a parent transaction
+     */
+    public async getSplitsForParent(parentId: string): Promise<Expense[]> {
+        const result = await this.db.execute(
+            `SELECT e.*, c.name as categoryName 
+             FROM expenses e 
+             LEFT JOIN categories c ON e.categoryId = c.id
+             WHERE e.parentId = ? OR e.id = ?
+             ORDER BY e.date DESC`,
+            [parentId, parentId]
+        );
+
+        return Database.getRows(result).map(row => ({
+            ...row,
+            excludeFromAnalytics: !!row.excludeFromAnalytics,
+            isBusiness: !!row.isBusiness,
+            isVerified: !!row.isVerified
+        })) as Expense[];
+    }
 
     /**
      * Get Recent Expenses
@@ -176,24 +222,28 @@ export class ExpenseRepository {
 
     /**
      * Get All Categories
+     * @param topLevelOnly If true, only returns categories without a parentId (ignores legacy sub-cats)
      */
-    public async getAllCategories(): Promise<Category[]> {
-        const result = await this.db.execute('SELECT * FROM categories ORDER BY name ASC');
+    public async getAllCategories(topLevelOnly: boolean = false): Promise<Category[]> {
+        const query = topLevelOnly
+            ? 'SELECT * FROM categories WHERE parentId IS NULL ORDER BY name ASC'
+            : 'SELECT * FROM categories ORDER BY name ASC';
+
+        const result = await this.db.execute(query);
         return Database.getRows(result).map(row => ({
             ...row,
             keywords: JSON.parse(row.keywords),
-            isCustom: !!row.isCustom,
-            parentId: row.parentId || undefined
+            isCustom: !!row.isCustom
         }));
     }
 
-    public async addCategory(name: string, keywords: string[] = [], budgetLimit?: number, isCustom: boolean = true, parentId?: string): Promise<Category> {
+    public async addCategory(name: string, keywords: string[] = [], budgetLimit?: number, isCustom: boolean = true): Promise<Category> {
         const id = uuidv4();
         const keywordsStr = JSON.stringify(keywords);
 
         await this.db.execute(
-            `INSERT INTO categories (id, name, keywords, budgetLimit, isCustom, parentId) VALUES (?, ?, ?, ?, ?, ?)`,
-            [id, name, keywordsStr, budgetLimit || null, isCustom ? 1 : 0, parentId || null]
+            `INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)`,
+            [id, name, keywordsStr, budgetLimit || null, isCustom ? 1 : 0]
         );
 
         return {
@@ -201,8 +251,7 @@ export class ExpenseRepository {
             name,
             keywords,
             budgetLimit,
-            isCustom,
-            parentId
+            isCustom
         };
     }
 
@@ -250,7 +299,7 @@ export class ExpenseRepository {
 
     // --- Updates ---
 
-    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness'>>): Promise<void> {
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness' | 'budgetBreakdownId' | 'tagId'>>): Promise<void> {
         const sets: string[] = [];
         const args: any[] = [];
 
@@ -277,6 +326,14 @@ export class ExpenseRepository {
         if (updates.isBusiness !== undefined) {
             sets.push('isBusiness = ?');
             args.push(updates.isBusiness ? 1 : 0);
+        }
+        if (updates.budgetBreakdownId !== undefined) {
+            sets.push('budgetBreakdownId = ?');
+            args.push(updates.budgetBreakdownId);
+        }
+        if (updates.tagId !== undefined) {
+            sets.push('tagId = ?');
+            args.push(updates.tagId);
         }
 
         if (sets.length === 0) return;
