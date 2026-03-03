@@ -122,16 +122,41 @@ export class Database {
         );
       `);
 
+        // Create Category Tags Table (Global)
+        db.execute(`
+          CREATE TABLE IF NOT EXISTS category_tags (
+            id TEXT PRIMARY KEY NOT NULL,
+            categoryId TEXT NOT NULL,
+            name TEXT NOT NULL,
+            FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
+            UNIQUE(categoryId, name)
+          );
+        `);
+
         // Create Budget Breakdowns Table
         db.execute(`
-        CREATE TABLE IF NOT EXISTS budget_breakdowns (
+          CREATE TABLE IF NOT EXISTS budget_breakdowns (
+            id TEXT PRIMARY KEY NOT NULL,
+            budgetLineId TEXT NOT NULL,
+            tagId TEXT NOT NULL,
+            plannedAmount REAL NOT NULL,
+            FOREIGN KEY(budgetLineId) REFERENCES budget_lines(id) ON DELETE CASCADE,
+            FOREIGN KEY(tagId) REFERENCES category_tags(id) ON DELETE CASCADE,
+            UNIQUE(budgetLineId, tagId)
+          );
+        `);
+
+        // Create Goals Table
+        db.execute(`
+        CREATE TABLE IF NOT EXISTS goals (
           id TEXT PRIMARY KEY NOT NULL,
-          budgetLineId TEXT NOT NULL,
-          categoryId TEXT NOT NULL,
-          plannedAmount REAL NOT NULL,
-          FOREIGN KEY(budgetLineId) REFERENCES budget_lines(id) ON DELETE CASCADE,
-          FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
-          UNIQUE(budgetLineId, categoryId)
+          name TEXT NOT NULL,
+          targetAmount REAL NOT NULL,
+          currentAmount REAL DEFAULT 0,
+          targetDate TEXT NOT NULL,
+          categoryId TEXT,
+          isCompleted BOOLEAN DEFAULT 0,
+          FOREIGN KEY(categoryId) REFERENCES categories(id)
         );
       `);
 
@@ -144,10 +169,10 @@ export class Database {
           description TEXT NOT NULL,
           metric TEXT,
           icon TEXT,
-          score REAL,
+          score REAL DEFAULT 0,
           created_at INTEGER NOT NULL,
           source TEXT NOT NULL,
-          context_data TEXT, 
+          context_data TEXT, -- JSON
           is_archived BOOLEAN DEFAULT 0
         );
       `);
@@ -217,6 +242,83 @@ export class Database {
               db.execute('ALTER TABLE expenses ADD COLUMN isBusiness BOOLEAN DEFAULT 0');
               console.log("Migrated: Added isBusiness column");
             } catch (e) { /* ignore duplicate column error */ }
+          }
+
+          if (!existingColumns.has('parentId')) {
+            try {
+              db.execute('ALTER TABLE expenses ADD COLUMN parentId TEXT DEFAULT NULL');
+              console.log("Migrated: Added parentId column to expenses");
+            } catch (e) { /* ignore duplicate column error */ }
+          }
+
+          if (!existingColumns.has('budgetBreakdownId')) {
+            try {
+              db.execute('ALTER TABLE expenses ADD COLUMN budgetBreakdownId TEXT DEFAULT NULL');
+              console.log("Migrated: Added budgetBreakdownId column to expenses");
+            } catch (e) { /* ignore duplicate column error */ }
+          }
+
+          if (!existingColumns.has('tagId')) {
+            try {
+              db.execute('ALTER TABLE expenses ADD COLUMN tagId TEXT DEFAULT NULL');
+              console.log("Migrated: Added tagId column to expenses");
+            } catch (e) { /* ignore duplicate column error */ }
+          }
+
+          // 3. Global Tagging Migration
+          try {
+            const bbInfo = db.execute('PRAGMA table_info(budget_breakdowns)');
+            const columns = Database.getRows(bbInfo);
+            const hasItemName = columns.some((c: any) => c.name === 'itemName');
+            const hasTagId = columns.some((c: any) => c.name === 'tagId');
+
+            if (hasItemName && !hasTagId) {
+              console.log("Starting Global Tagging Migration...");
+
+              // 1. Create temporary tags for ALL existing breakdowns
+              const oldBreakdowns = Database.getRows(db.execute(`
+                SELECT bb.*, bl.categoryId 
+                FROM budget_breakdowns bb 
+                JOIN budget_lines bl ON bb.budgetLineId = bl.id
+              `));
+
+              for (const bb of oldBreakdowns) {
+                const tagId = uuidv4();
+                // Create or get global tag
+                db.execute(`
+                  INSERT OR IGNORE INTO category_tags (id, categoryId, name) 
+                  VALUES (?, ?, ?)
+                `, [tagId, bb.categoryId, bb.itemName]);
+
+                // Get the actual id (whether just created or already existed)
+                const tagRow = Database.getRows(db.execute(
+                  'SELECT id FROM category_tags WHERE categoryId = ? AND name = ?',
+                  [bb.categoryId, bb.itemName]
+                ))[0];
+                const actualTagId = tagRow?.id || tagId;
+
+                // Update expenses that were linked to this specific breakdown
+                db.execute('UPDATE expenses SET tagId = ? WHERE budgetBreakdownId = ?', [actualTagId, bb.id]);
+              }
+
+              // 2. Re-create budget_breakdowns with tagId
+              // We'll do this by creating a temp table
+              db.execute('CREATE TABLE budget_breakdowns_new (id TEXT PRIMARY KEY NOT NULL, budgetLineId TEXT NOT NULL, tagId TEXT NOT NULL, plannedAmount REAL NOT NULL)');
+
+              db.execute(`
+                INSERT INTO budget_breakdowns_new (id, budgetLineId, tagId, plannedAmount)
+                SELECT bb.id, bb.budgetLineId, ct.id, bb.plannedAmount
+                FROM budget_breakdowns bb
+                JOIN budget_lines bl ON bb.budgetLineId = bl.id
+                JOIN category_tags ct ON bl.categoryId = ct.categoryId AND bb.itemName = ct.name
+              `);
+
+              db.execute('DROP TABLE budget_breakdowns');
+              db.execute('ALTER TABLE budget_breakdowns_new RENAME TO budget_breakdowns');
+              console.log("Global Tagging Migration completed.");
+            }
+          } catch (e) {
+            console.warn("Global Tagging migration failed", e);
           }
         } catch (e) {
           console.warn("Migration check failed", e);

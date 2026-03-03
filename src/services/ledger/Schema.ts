@@ -1,6 +1,5 @@
 export interface Category {
     id: string;
-    parentId?: string; // Optional: Links a sub-category to a top-level bucket
     name: string;
     keywords: string[]; // JSON stringified array in DB
     budgetLimit?: number;
@@ -25,6 +24,9 @@ export interface Expense {
     sender?: string;
     recipient?: string;
     account?: string; // e.g. M-Shwari, Pochi, KCB
+    parentId?: string; // New: For Transaction Splitting (links to parent transactionId or id)
+    budgetBreakdownId?: string; // Link to a specific budget breakdown/bucket
+    tagId?: string; // New: Link to a permanent category tag
 }
 
 export interface Budget {
@@ -42,15 +44,30 @@ export interface BudgetLine {
     // For UI convenience in joined queries:
     categoryName?: string;
     spentAmount?: number;
+    isUnplanned?: boolean;
 }
 
 export interface BudgetBreakdown {
     id: string;
     budgetLineId: string; // FK to budget_lines
-    categoryId: string;   // FK to categories (the sub-category)
+    tagId: string;        // FK to category_tags
     plannedAmount: number;
-    // For UI convenience
-    categoryName?: string;
+}
+
+export interface CategoryTag {
+    id: string;
+    categoryId: string;   // FK to categories
+    name: string;         // e.g. "Eating Out"
+}
+
+export interface Goal {
+    id: string;
+    name: string;
+    targetAmount: number;
+    currentAmount: number; // accumulated so far
+    targetDate: string; // ISO String
+    categoryId?: string; // Optional: Link to a specific category
+    isCompleted: boolean;
 }
 
 export const DEFAULT_CATEGORIES: Omit<Category, 'id'>[] = [
