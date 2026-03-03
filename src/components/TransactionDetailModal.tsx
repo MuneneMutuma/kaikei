@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, TextInput, ActivityIndicator, Alert, ScrollView, KeyboardAvoidingView, Platform, LayoutAnimation, Switch } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Expense, Category } from '../services/ledger/Schema';
+import { Expense, Category, BudgetBreakdown } from '../services/ledger/Schema';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
+import { BudgetRepository } from '../services/ledger/BudgetRepository';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { Check, Trash2, Calendar, Clock, Tag, Save, AlertTriangle, ChevronRight, ChevronDown, Edit3, Briefcase, User } from 'lucide-react-native';
+import { Check, Trash2, Calendar, Clock, Tag, Save, AlertTriangle, ChevronRight, ChevronDown, Edit3, Briefcase, User, AlertCircle, Layers, Plus, X } from 'lucide-react-native';
 import { getCategoryIcon, getCategoryColor } from '../screens/AnalyticsScreen';
 
 interface TransactionDetailModalProps {
@@ -24,8 +25,31 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
     const [isBusiness, setIsBusiness] = useState(false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+    const [availableBreakdowns, setAvailableBreakdowns] = useState<(BudgetBreakdown & { itemName: string })[]>([]);
+    const [availableTags, setAvailableTags] = useState<{ id: string, name: string }[]>([]);
+    const [selectedBreakdownId, setSelectedBreakdownId] = useState<string | null>(null);
+    const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+    const [budgetStats, setBudgetStats] = useState<{ limit: number, spent: number } | null>(null);
+
+    // Dynamic Tag State
+    const [tagModalVisible, setTagModalVisible] = useState(false);
+    const [newTagName, setNewTagName] = useState("");
+    const [addingTag, setAddingTag] = useState(false);
+
+    const tagInputRef = useRef<TextInput>(null);
+
+    // Auto-focus keyboard when tag modal opens
+    useEffect(() => {
+        if (tagModalVisible) {
+            const timer = setTimeout(() => {
+                tagInputRef.current?.focus();
+            }, 150);
+            return () => clearTimeout(timer);
+        }
+    }, [tagModalVisible]);
 
     const repo = useRef(new ExpenseRepository());
+    const budgetRepo = useRef(new BudgetRepository());
 
     useEffect(() => {
         if (visible && transaction) {
@@ -33,13 +57,77 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
             setAmount(transaction.amount.toString());
             setCategoryId(transaction.categoryId);
             setIsBusiness(transaction.isBusiness || false);
+            setSelectedTagId(transaction.tagId || null);
+            setSelectedBreakdownId(transaction.budgetBreakdownId || null);
             loadCategories();
         }
     }, [visible, transaction]);
 
+    useEffect(() => {
+        if (categoryId) {
+            fetchBreakdowns(categoryId);
+        }
+    }, [categoryId]);
+
+    const fetchBreakdowns = async (catId: string) => {
+        const month = transaction?.date ? transaction.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+        try {
+            // 1. Fetch Planned Breakdowns
+            const data = await budgetRepo.current.getBudgetWithBreakdowns(catId, month, false);
+            setBudgetStats(data ? { limit: data.line.limitAmount, spent: data.line.spentAmount || 0 } : null);
+            setAvailableBreakdowns(data?.breakdowns || []);
+
+            // 2. Fetch ALL Global Tags
+            const allTags = await budgetRepo.current.getCategoryTags(catId);
+            setAvailableTags(allTags);
+
+            // Migration Fallback: If transaction has a breakdown but no tagId yet
+            if (transaction?.budgetBreakdownId && !transaction.tagId) {
+                const bb = data?.breakdowns.find((b: any) => b.id === transaction.budgetBreakdownId);
+                if (bb) setSelectedTagId(bb.tagId);
+            }
+        } catch (e) {
+            console.error("fetchBreakdowns failed", e);
+            setBudgetStats(null);
+            setAvailableBreakdowns([]);
+            setAvailableTags([]);
+        }
+    };
+
     const loadCategories = async () => {
-        const cats = await repo.current.getAllCategories();
+        const cats = await repo.current.getAllCategories(true); // topLevelOnly = true
         setCategories(cats);
+    };
+
+    const handleAddNewTag = async () => {
+        if (!newTagName.trim() || !categoryId) return;
+        setAddingTag(true);
+        try {
+            const newTag = await budgetRepo.current.getOrCreateTag(categoryId, newTagName.trim());
+
+            // Refresh lists
+            await fetchBreakdowns(categoryId);
+
+            // Select it
+            setSelectedTagId(newTag.id);
+            // Link to breakdown if it exists
+            const month = transaction?.date ? transaction.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+            const data = await budgetRepo.current.getBudgetWithBreakdowns(categoryId, month, false);
+            const matchingBreakdown = data?.breakdowns.find((b: any) => b.tagId === newTag.id);
+            setSelectedBreakdownId(matchingBreakdown?.id || null);
+
+            // Update description
+            const cleanDesc = (description || '').replace(/\[.*\]/, '').trim();
+            setDescription(`${cleanDesc} [${newTag.name}]`.trim());
+
+            setTagModalVisible(false);
+            setNewTagName("");
+        } catch (e) {
+            console.error("Failed to add tag", e);
+            Alert.alert("Error", "Could not add custom tag.");
+        } finally {
+            setAddingTag(false);
+        }
     };
 
     const handleSave = async () => {
@@ -51,7 +139,9 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                 amount: parseFloat(amount) || transaction.amount,
                 categoryId,
                 isVerified: true,
-                isBusiness
+                isBusiness,
+                budgetBreakdownId: selectedBreakdownId || undefined,
+                tagId: selectedTagId || undefined
             });
             onUpdate();
             onClose();
@@ -94,6 +184,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
     const dateObj = new Date(transaction.date);
     const dateStr = dateObj.toLocaleDateString([], { day: 'numeric', month: 'short' });
     const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const isSplit = !!transaction.parentId; // Simple check for now
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -212,6 +303,77 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                         </View>
                     )}
 
+                    {/* Global Tagging Section */}
+                    {(selectedCategory || categoryId) && (
+                        <>
+                            <View style={styles.actionRow}>
+                                <View style={styles.actionIcon}>
+                                    <Layers size={20} color={colors.textSecondary} />
+                                </View>
+                                <Text style={styles.actionLabel}>Transaction Tag</Text>
+                            </View>
+
+                            <View style={styles.pickerContainer}>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipList}>
+                                    {/* "None" Option */}
+                                    <TouchableOpacity
+                                        style={[styles.chip, !selectedTagId && { backgroundColor: `${colors.primary}20`, borderColor: colors.primary }]}
+                                        onPress={() => {
+                                            const newDesc = (description || '').replace(/\[.*\]/, '').trim();
+                                            setSelectedTagId(null);
+                                            setSelectedBreakdownId(null);
+                                            setDescription(newDesc);
+                                        }}
+                                    >
+                                        <Text style={[styles.chipText, !selectedTagId && { color: colors.primary, fontWeight: '600' }]}>
+                                            None
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {/* Available Tags */}
+                                    {availableTags.map(tag => {
+                                        const active = tag.id === selectedTagId;
+                                        const isPlanned = availableBreakdowns.some(b => b.tagId === tag.id);
+                                        return (
+                                            <TouchableOpacity
+                                                key={tag.id}
+                                                style={[styles.chip, active && { backgroundColor: `${colors.primary}20`, borderColor: colors.primary }]}
+                                                onPress={() => {
+                                                    const newDesc = (description || '').replace(/\[.*\]/, '').trim();
+                                                    setSelectedTagId(tag.id);
+                                                    // Link to breakdown if planned
+                                                    const brk = availableBreakdowns.find(b => b.tagId === tag.id);
+                                                    setSelectedBreakdownId(brk?.id || null);
+                                                    setDescription(`${newDesc} [${tag.name}]`.trim());
+                                                }}
+                                            >
+                                                <Layers size={14} color={active ? colors.primary : colors.textSecondary} />
+                                                <Text style={[styles.chipText, active && { color: colors.primary, fontWeight: '600' }]}>
+                                                    {tag.name}
+                                                    {isPlanned && " •"}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+
+                                    {/* Add New Tag */}
+                                    <TouchableOpacity
+                                        style={[styles.chip, { borderStyle: 'dashed', borderColor: colors.primary }]}
+                                        onPress={() => setTagModalVisible(true)}
+                                    >
+                                        <Plus size={14} color={colors.primary} />
+                                        <Text style={[styles.chipText, { color: colors.primary, fontWeight: '700' }]}>
+                                            New Tag
+                                        </Text>
+                                    </TouchableOpacity>
+                                </ScrollView>
+                            </View>
+                            <View style={styles.divider} />
+                        </>
+                    )}
+
+
+
                     {/* Footer Actions - Equal Width */}
                     {/* Business/Personal Toggle */}
                     {/* Business/Personal Selector Cards */}
@@ -244,7 +406,14 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                             <Text style={[styles.btnText, { color: colors.error }]}>Delete</Text>
                         </TouchableOpacity>
 
-                        <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleSave} disabled={loading}>
+                        <TouchableOpacity
+                            style={[
+                                styles.btn,
+                                styles.btnSave,
+                            ]}
+                            onPress={handleSave}
+                            disabled={loading}
+                        >
                             {loading ? (
                                 <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
                             ) : (
@@ -261,6 +430,65 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                     </View>
                 </KeyboardAvoidingView>
             </View>
+
+            {/* Dynamic Tag Creation Modal */}
+            <Modal
+                visible={tagModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setTagModalVisible(false)}
+            >
+                <View style={styles.miniModalOverlay}>
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === "ios" ? "padding" : undefined}
+                        style={styles.miniModalContent}
+                    >
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Add Budget Bucket</Text>
+                            <TouchableOpacity onPress={() => setTagModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                                <X size={20} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={styles.modalSubtitle}>
+                            New tag for <Text style={{ fontWeight: 'bold' }}>{categories.find(c => c.id === categoryId)?.name || 'this category'}</Text>
+                        </Text>
+
+                        <View style={styles.inputWrapper}>
+                            <Layers size={20} color={colors.primary} style={styles.inputIcon} />
+                            <TextInput
+                                ref={tagInputRef}
+                                style={styles.textInput}
+                                placeholder="Bucket name (e.g. Avocado, Fuel)"
+                                placeholderTextColor={colors.textSecondary}
+                                value={newTagName}
+                                onChangeText={setNewTagName}
+                            />
+                        </View>
+
+                        <View style={styles.modalActions}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={() => setTagModalVisible(false)}
+                            >
+                                <Text style={styles.cancelBtnText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.createBtn, !newTagName.trim() && { backgroundColor: '#F1F5F9' }]}
+                                onPress={handleAddNewTag}
+                                disabled={addingTag || !newTagName.trim()}
+                            >
+                                {addingTag ? <ActivityIndicator size="small" color="#fff" /> : (
+                                    <>
+                                        <Text style={[styles.createBtnText, !newTagName.trim() && { color: colors.textSecondary }]}>Create</Text>
+                                        <Check size={16} color={!newTagName.trim() ? colors.textSecondary : "#0d1b12"} style={{ marginLeft: 4 }} />
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
         </Modal>
     );
 };
@@ -431,6 +659,23 @@ const styles = StyleSheet.create({
     btnSave: {
         backgroundColor: colors.primary,
     },
+    btnDisabled: {
+        backgroundColor: '#CBD5E1',
+    },
+    requiredBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 10,
+        marginRight: 16
+    },
+    requiredText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: colors.danger
+    },
 
     // Selector Cards
     selectorContainer: {
@@ -449,6 +694,93 @@ const styles = StyleSheet.create({
         backgroundColor: '#F8FAFC',
         borderWidth: 2,
         borderColor: 'transparent',
+    },
+    saveButtonText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#0d1b12',
+    },
+    // Tag Modal Styles
+    miniModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24
+    },
+    miniModalContent: {
+        backgroundColor: 'white',
+        borderRadius: 20,
+        padding: 20,
+        width: '100%',
+        maxWidth: 340,
+        shadowColor: "#000",
+        shadowOpacity: 0.3,
+        shadowRadius: 15,
+        elevation: 10
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: colors.text
+    },
+    modalSubtitle: {
+        fontSize: 13,
+        color: colors.textSecondary,
+        marginBottom: 16
+    },
+    inputWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F1F5F9',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        marginBottom: 20
+    },
+    inputIcon: {
+        marginRight: 8
+    },
+    textInput: {
+        flex: 1,
+        height: 44,
+        fontSize: 15,
+        color: colors.text
+    },
+    modalActions: {
+        flexDirection: 'row',
+        gap: 10
+    },
+    cancelBtn: {
+        flex: 1,
+        paddingVertical: 10,
+        alignItems: 'center',
+        borderRadius: 8,
+        backgroundColor: '#f1f5f9'
+    },
+    cancelBtnText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: colors.textSecondary
+    },
+    createBtn: {
+        flex: 1.5,
+        backgroundColor: colors.primary,
+        paddingVertical: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 8,
+        flexDirection: 'row'
+    },
+    createBtnText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#0d1b12'
     },
     selectorText: {
         fontSize: 16,

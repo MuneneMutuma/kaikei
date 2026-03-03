@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { colors } from '../theme/colors';
 import { BudgetRepository } from '../services/ledger/BudgetRepository';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
@@ -34,8 +34,8 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
     const [showBreakdown, setShowBreakdown] = useState(false);
     const [breakdowns, setBreakdowns] = useState<{ id: string, name: string, amount: string }[]>([]);
 
-    // Simplistic fixed cycle for MVP
-    const CYCLE_TYPE = 'monthly';
+    // Budget Cycle State
+    const [cycleType, setCycleType] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
 
     const expenseRepo = new ExpenseRepository();
     const budgetRepo = new BudgetRepository();
@@ -68,7 +68,7 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
                 setShowBreakdown(true);
                 setBreakdowns(existing.map(b => ({
                     id: b.id,
-                    name: b.categoryName || '',
+                    name: b.itemName,
                     amount: b.plannedAmount.toString()
                 })));
             }
@@ -92,6 +92,32 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
         }
     };
 
+    const handleDelete = async () => {
+        if (!initialBudgetLineId) return;
+
+        Alert.alert(
+            "Delete Budget",
+            "Are you sure? This will remove the budget limit and all itemized breakdowns.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            await budgetRepo.deleteBudgetLine(initialBudgetLineId);
+                            onBudgetAdded();
+                            onClose();
+                        } catch (e) {
+                            console.error("Failed to delete budget", e);
+                            Alert.alert("Error", "Could not delete budget entry.");
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const handleSave = async () => {
         if (!limitAmount) return;
         const amount = parseFloat(limitAmount);
@@ -110,36 +136,27 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
 
             if (!finalCategoryId) return; // Still no category selected or created
 
-            const budget = await budgetRepo.getOrCreateBudget(currentMonth, CYCLE_TYPE);
+            // For now, month navigation is tied to monthly budgets. 
+            // Weekly/Daily budgets will still be grouped under the "Month" bucket for the MVP dashboard.
+            const budget = await budgetRepo.getOrCreateBudget(currentMonth, cycleType);
             const budgetLine = await budgetRepo.upsertBudgetLine(budget.id, finalCategoryId, amount);
 
             // Save Breakdowns
             if (showBreakdown && breakdowns.length > 0) {
-                const breakdownEntities = [];
+                const breakdownItems = [];
                 for (const b of breakdowns) {
-                    if (!b.name.trim() || !b.amount) continue;
-                    let subCatId = undefined;
-                    // Find if matching subcategory exists
-                    const existing = categories.find(c => c.name.toLowerCase() === b.name.trim().toLowerCase());
-                    if (existing) {
-                        subCatId = existing.id;
-                    } else {
-                        // Create it specifically as a sub-category
-                        const newSub = await expenseRepo.addCategory(b.name.trim(), [], undefined, true, finalCategoryId);
-                        subCatId = newSub.id;
-                    }
-                    if (subCatId) {
-                        breakdownEntities.push({
-                            categoryId: subCatId,
-                            plannedAmount: parseFloat(b.amount) || 0
+                    if (b.name.trim() !== '' && !isNaN(parseFloat(b.amount)) && parseFloat(b.amount) > 0) {
+                        const tag = await budgetRepo.getOrCreateTag(finalCategoryId, b.name.trim());
+                        breakdownItems.push({
+                            tagId: tag.id,
+                            plannedAmount: parseFloat(b.amount)
                         });
                     }
                 }
-                const validBreakdowns = breakdownEntities.filter(b => b.plannedAmount > 0);
-                await budgetRepo.saveBudgetBreakdowns(budgetLine.id, validBreakdowns);
+                await budgetRepo.saveBudgetBreakdowns(budgetLine.id, breakdownItems);
             } else if (!showBreakdown && initialBudgetLineId) {
                 // If they unchecked it, clear existing ones
-                await budgetRepo.saveBudgetBreakdowns(budgetLine.id, []);
+                await budgetRepo.saveBudgetBreakdowns(initialBudgetLineId, []);
             }
 
             onBudgetAdded();
@@ -220,6 +237,26 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
 
                             <View style={styles.divider} />
 
+                            {/* Cycle Selection */}
+                            <View style={styles.cycleContainer}>
+                                <Text style={styles.label}>Budget Cycle</Text>
+                                <View style={styles.chipRow}>
+                                    {(['daily', 'weekly', 'monthly'] as const).map((type) => (
+                                        <Pressable
+                                            key={type}
+                                            style={[styles.cycleChip, cycleType === type && styles.cycleChipActive]}
+                                            onPress={() => setCycleType(type)}
+                                        >
+                                            <Text style={[styles.cycleChipText, cycleType === type && styles.cycleChipTextActive]}>
+                                                {type.charAt(0).toUpperCase() + type.slice(1)}
+                                            </Text>
+                                        </Pressable>
+                                    ))}
+                                </View>
+                            </View>
+
+                            <View style={styles.divider} />
+
                             {/* Autopilot Suggestions - Simplified to pure numbers */}
                             {suggestions.length > 0 && (
                                 <View style={styles.suggestionsContainer}>
@@ -278,7 +315,6 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
                                 <View style={styles.pickerContainer}>
                                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipList}>
                                         {categories
-                                            .filter(cat => !cat.parentId)
                                             .map(cat => {
                                                 const isActive = selectedCategory === cat.id;
                                                 const CIcon = getCategoryIcon(cat.name);
@@ -412,9 +448,15 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
                     )}
 
                     <View style={[styles.footer, { paddingHorizontal: 20 }]}>
-                        <Pressable style={[styles.btn, styles.btnCancel]} onPress={onClose}>
-                            <Text style={styles.btnCancelText}>Cancel</Text>
-                        </Pressable>
+                        {initialBudgetLineId ? (
+                            <Pressable style={[styles.btn, styles.btnDelete]} onPress={handleDelete}>
+                                <Text style={styles.btnDeleteText}>Delete</Text>
+                            </Pressable>
+                        ) : (
+                            <Pressable style={[styles.btn, styles.btnCancel]} onPress={onClose}>
+                                <Text style={styles.btnCancelText}>Cancel</Text>
+                            </Pressable>
+                        )}
 
                         {(() => {
                             const brkTotal = breakdowns.reduce((sum, b) => sum + (parseFloat(b.amount) || 0), 0);
@@ -433,7 +475,7 @@ export const BudgetSetupModal: React.FC<BudgetSetupModalProps> = ({
                                     onPress={handleSave}
                                     disabled={!!isDisabled}
                                 >
-                                    <Text style={styles.btnSaveText}>Save Budget</Text>
+                                    <Text style={styles.btnSaveText}>{initialBudgetLineId ? 'Update Budget' : 'Save Budget'}</Text>
                                 </Pressable>
                             );
                         })()}
@@ -541,7 +583,35 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: colors.textSecondary,
         fontWeight: '700',
-        marginBottom: 12,
+        marginBottom: 8,
+    },
+    cycleContainer: {
+        marginBottom: 8,
+    },
+    chipRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    cycleChip: {
+        flex: 1,
+        paddingVertical: 10,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    cycleChipActive: {
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
+    },
+    cycleChipText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: colors.textSecondary,
+    },
+    cycleChipTextActive: {
+        color: '#0d1b12',
     },
     suggestionsContainer: {
         marginBottom: 8,
@@ -759,6 +829,14 @@ const styles = StyleSheet.create({
         color: '#0d1b12',
         fontWeight: 'bold',
         fontSize: 16,
+    },
+    btnDelete: {
+        backgroundColor: '#FEE2E2',
+    },
+    btnDeleteText: {
+        color: colors.danger,
+        fontWeight: '700',
+        fontSize: 15,
     },
     btnDisabled: {
         opacity: 0.5,
