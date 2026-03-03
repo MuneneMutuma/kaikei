@@ -10,19 +10,22 @@ import {
     Alert,
     StatusBar,
     BackHandler,
-    Switch
+    Switch,
+    Modal,
+    TextInput
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { View as MotiView } from 'moti';
-import { Check, ChevronLeft, X, Briefcase } from 'lucide-react-native';
+import { Check, ChevronLeft, X, Briefcase, Plus, Layers } from 'lucide-react-native';
 
 import AmountStep from "./AmountStep";
 import CategoryStep, { getCategoryColor, getCategoryIcon } from "./CategoryStep";
 import NoteStep from "./NoteStep";
-import { Category } from "../services/ledger/Schema";
+import { Category, BudgetBreakdown } from "../services/ledger/Schema";
 
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
+import { BudgetRepository } from "../services/ledger/BudgetRepository";
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
 
@@ -30,17 +33,38 @@ const AddManualExpenseScreen: React.FC = () => {
     const navigation = useNavigation();
     const insets = useSafeAreaInsets();
     const repo = useRef(new ExpenseRepository());
+    const budgetRepo = useRef(new BudgetRepository());
 
     // Form State
     const [step, setStep] = useState<number>(1);
     const [amount, setAmount] = useState<string>("");
-    const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
     const [dbCategories, setDbCategories] = useState<Category[]>([]);
+    const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
     const [note, setNote] = useState<string>("");
     const [isBusiness, setIsBusiness] = useState(false);
+    const [availableBreakdowns, setAvailableBreakdowns] = useState<(BudgetBreakdown & { itemName: string })[]>([]);
+    const [availableTags, setAvailableTags] = useState<{ id: string, name: string }[]>([]);
+    const [selectedBreakdownId, setSelectedBreakdownId] = useState<string | null>(null);
+    const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
 
-    // UI State
+    // Dynamic Tag State
+    const [tagModalVisible, setTagModalVisible] = useState(false);
+    const [newTagName, setNewTagName] = useState("");
+    const [addingTag, setAddingTag] = useState(false);
+
     const [saving, setSaving] = useState(false);
+
+    const tagInputRef = useRef<TextInput>(null);
+
+    // Auto-focus keyboard when tag modal opens
+    useEffect(() => {
+        if (tagModalVisible) {
+            const timer = setTimeout(() => {
+                tagInputRef.current?.focus();
+            }, 150);
+            return () => clearTimeout(timer);
+        }
+    }, [tagModalVisible]);
 
     // --- LOAD DATA ---
     useEffect(() => {
@@ -80,9 +104,12 @@ const AddManualExpenseScreen: React.FC = () => {
                 categoryId: selectedCategory.id,
                 source: 'manual',
                 rawText: '',
+                recipient: selectedCategory.name, // Default to category name for manual entry
                 type: 'expense',
                 isVerified: true,
-                isBusiness // <--- Passed to repo
+                isBusiness,
+                budgetBreakdownId: selectedBreakdownId || undefined,
+                tagId: selectedTagId || undefined
             });
             navigation.goBack();
         } catch (e) {
@@ -102,7 +129,71 @@ const AddManualExpenseScreen: React.FC = () => {
             }
         } else {
             setSelectedCategory(item);
+            // Intelligent Linker: Fetch breakdowns immediately
+            fetchBreakdowns(item.id);
             setStep(prev => prev + 1); // Auto-advance on category select
+        }
+    };
+
+    const fetchBreakdowns = async (catId: string) => {
+        const month = new Date().toISOString().slice(0, 7);
+        try {
+            // 1. Fetch Planned Breakdowns (for consumption)
+            const data = await budgetRepo.current.getBudgetWithBreakdowns(catId, month, false);
+            setAvailableBreakdowns(data?.breakdowns || []);
+
+            // 2. Fetch ALL Global Tags for this category (for classification)
+            const allTags = await budgetRepo.current.getCategoryTags(catId);
+            setAvailableTags(allTags);
+
+            // Auto-select "General" if it exists
+            const generalTag = allTags.find(t => t.name.toLowerCase() === 'general');
+            if (generalTag) {
+                setSelectedTagId(generalTag.id);
+                // See if it has a breakdown
+                const matchingBreakdown = data?.breakdowns.find(b => b.tagId === generalTag.id);
+                setSelectedBreakdownId(matchingBreakdown?.id || null);
+            } else {
+                setSelectedTagId(null);
+                setSelectedBreakdownId(null);
+            }
+
+        } catch (e) {
+            console.error("Failed to fetch tags/breakdowns", e);
+            setAvailableBreakdowns([]);
+            setAvailableTags([]);
+        }
+    };
+
+    const handleAddNewTag = async () => {
+        if (!newTagName.trim() || !selectedCategory) return;
+        setAddingTag(true);
+        try {
+            // 1. Create GLOBAL tag (this is permanent and independent of budget)
+            const newTag = await budgetRepo.current.getOrCreateTag(selectedCategory.id, newTagName.trim());
+
+            // Refresh list
+            await fetchBreakdowns(selectedCategory.id);
+
+            // Select it
+            setSelectedTagId(newTag.id);
+            // Link to breakdown if it exists (it won't yet unless we promote it, but fetchBreakdowns handles the check)
+            const month = new Date().toISOString().slice(0, 7);
+            const data = await budgetRepo.current.getBudgetWithBreakdowns(selectedCategory.id, month, false);
+            const matchingBreakdown = data?.breakdowns.find(b => b.tagId === newTag.id);
+            setSelectedBreakdownId(matchingBreakdown?.id || null);
+
+            // Update UI/Note
+            const cleanNote = note.replace(/\[.*\]/, '').trim();
+            setNote(`${cleanNote} [${newTag.name}]`.trim());
+
+            setTagModalVisible(false);
+            setNewTagName("");
+        } catch (e) {
+            console.error("Failed to add tag", e);
+            Alert.alert("Error", "Could not add custom tag.");
+        } finally {
+            setAddingTag(false);
         }
     };
 
@@ -243,10 +334,79 @@ const AddManualExpenseScreen: React.FC = () => {
                                 categoryName: selectedCategory?.name || '',
                                 categoryColor: selectedCategory ? getCategoryColor(selectedCategory.name) : colors.primary
                             }}
+                            dbCategories={dbCategories}
+                            availableTags={availableTags}
+                            selectedTagId={selectedTagId}
+                            onSelectTag={(tagId) => {
+                                setSelectedTagId(tagId);
+                                // Map to breakdown if planned
+                                const breakdown = availableBreakdowns?.find(b => b.tagId === tagId);
+                                setSelectedBreakdownId(breakdown?.id || null);
+                            }}
+                            onAddBreakdown={() => setTagModalVisible(true)}
                         />
                     </MotiView>
                 )}
             </KeyboardAvoidingView>
+
+            {/* Tag Creation Modal */}
+            <Modal
+                visible={tagModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setTagModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === "ios" ? "padding" : undefined}
+                        style={styles.modalContent}
+                    >
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Add Budget Bucket</Text>
+                            <TouchableOpacity onPress={() => setTagModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                                <X size={20} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={styles.modalSubtitle}>
+                            Creating a new tag for <Text style={{ fontWeight: 'bold' }}>{selectedCategory?.name}</Text>
+                        </Text>
+
+                        <View style={styles.inputWrapper}>
+                            <Layers size={20} color={colors.primary} style={styles.inputIcon} />
+                            <TextInput
+                                ref={tagInputRef}
+                                style={styles.textInput}
+                                placeholder="Bucket name (e.g. Avocado, Fuel, Wifi)"
+                                placeholderTextColor={colors.textSecondary}
+                                value={newTagName}
+                                onChangeText={setNewTagName}
+                            />
+                        </View>
+
+                        <View style={styles.modalActions}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={() => setTagModalVisible(false)}
+                            >
+                                <Text style={styles.cancelBtnText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.createBtn, !newTagName.trim() && styles.disabledBtnSecondary]}
+                                onPress={handleAddNewTag}
+                                disabled={addingTag || !newTagName.trim()}
+                            >
+                                {addingTag ? <ActivityIndicator size="small" color="#fff" /> : (
+                                    <>
+                                        <Text style={[styles.createBtnText, !newTagName.trim() && { color: colors.textSecondary }]}>Create Tag</Text>
+                                        <Check size={16} color={!newTagName.trim() ? colors.textSecondary : "#0d1b12"} style={{ marginLeft: 4 }} />
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
 
             {/* 3. Footer Actions (No Voice) */}
             <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 20) }]}>
@@ -265,7 +425,10 @@ const AddManualExpenseScreen: React.FC = () => {
                 {step === 3 ? (
                     <TouchableOpacity
                         onPress={saveExpense}
-                        style={styles.saveBtn}
+                        style={[
+                            styles.saveBtn,
+                            saving ? styles.disabledBtn : null
+                        ]}
                         disabled={saving}
                     >
                         {saving ? (
@@ -408,6 +571,94 @@ const styles = StyleSheet.create({
         color: '#0d1b12',
         fontWeight: '700',
         fontSize: 16
+    },
+    disabledBtnSecondary: {
+        backgroundColor: '#F1F5F9',
+        elevation: 0,
+    },
+    // Tag Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24
+    },
+    modalContent: {
+        backgroundColor: 'white',
+        borderRadius: 24,
+        padding: 24,
+        width: '100%',
+        maxWidth: 400,
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        elevation: 5
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: colors.text
+    },
+    modalSubtitle: {
+        fontSize: 14,
+        color: colors.textSecondary,
+        marginBottom: 20
+    },
+    inputWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        marginBottom: 24
+    },
+    inputIcon: {
+        marginRight: 10
+    },
+    textInput: {
+        flex: 1,
+        height: 48,
+        fontSize: 16,
+        color: colors.text
+    },
+    modalActions: {
+        flexDirection: 'row',
+        gap: 12
+    },
+    cancelBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderRadius: 12,
+        backgroundColor: '#f1f5f9'
+    },
+    cancelBtnText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textSecondary
+    },
+    createBtn: {
+        flex: 2,
+        backgroundColor: colors.primary,
+        paddingVertical: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 12,
+        flexDirection: 'row'
+    },
+    createBtnText: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#0d1b12'
     }
 });
 
