@@ -1,8 +1,9 @@
-import React from "react";
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, ScrollView, Dimensions } from "react-native";
+import React, { useRef } from 'react';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Dimensions } from "react-native";
+import { SwipeableSheet, SwipeableSheetRef } from '../components/common/SwipeableSheet';
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
-import { getCategoryIcon, getCategoryColor } from "./CategoryStep";
+import { getCategoryIcon, getCategoryColor } from "../utils/categoryHelpers";
 import { Plus, X, Split, AlertCircle, Check, Layers } from "lucide-react-native";
 import { Category, BudgetBreakdown } from "../services/ledger/Schema";
 
@@ -17,12 +18,24 @@ type Props = {
   onEditCategory?: () => void;
   onEditAmount?: () => void;
   isSplit?: boolean;
-  splits?: { categoryId: string, categoryName: string, amount: string, budgetBreakdownId?: string }[];
+  setIsSplit?: (v: boolean) => void;
+  splits?: {
+    categoryId: string,
+    categoryName: string,
+    amount: string,
+    budgetBreakdownId?: string,
+    tagId?: string,
+    tagName?: string
+  }[];
   setSplits?: (s: any) => void;
   dbCategories?: Category[];
+  availableBreakdowns?: BudgetBreakdown[];
+  selectedBreakdownId?: string | null;
+  onSelectBreakdown?: (id: string | null) => void;
   availableTags?: { id: string, name: string }[];
-  selectedTagId?: string | null;
-  onSelectTag?: (id: string | null) => void;
+  selectedTagIds?: string[];
+  onSelectTag?: (id: string) => void;
+  onClearTags?: () => void;
   onAddBreakdown?: () => void;
 };
 
@@ -35,16 +48,28 @@ const NoteStep: React.FC<Props> = ({
   onEditCategory,
   onEditAmount,
   isSplit,
+  setIsSplit,
   splits,
   setSplits,
   dbCategories,
   availableTags,
-  selectedTagId,
+  selectedTagIds = [],
   onSelectTag,
+  onClearTags,
   onAddBreakdown
 }) => {
   const [pickerVisible, setPickerVisible] = React.useState(false);
   const [activeSplitIdx, setActiveSplitIdx] = React.useState<number | null>(null);
+  const splitPickerRef = useRef<SwipeableSheetRef>(null);
+  const existingTransactionsSheetRef = useRef<SwipeableSheetRef>(null);
+
+  React.useEffect(() => {
+    if (pickerVisible) {
+      splitPickerRef.current?.present();
+    } else {
+      splitPickerRef.current?.dismiss();
+    }
+  }, [pickerVisible]);
 
   const handleSelectSplitCat = (cat: Category) => {
     if (activeSplitIdx !== null && splits && setSplits) {
@@ -82,47 +107,89 @@ const NoteStep: React.FC<Props> = ({
         </View>
       )}
 
-      {/* Budget Tag Selector - ALWAYS VISIBLE if category is picked */}
+      {/* Budget Tag Selector - Panel Style */}
       {!isSplit && dbCategories && (
         <View style={styles.bucketSelectionContainer}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <Text style={styles.subLabel}>Transaction Tag</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bucketScroll}>
+
             <TouchableOpacity
               onPress={() => {
-                const newNote = note.replace(/\[.*\]/, '').trim();
-                onSelectTag?.(null);
+                setIsSplit?.(true);
+                if ((!splits || splits.length === 0) && summary) {
+                  setSplits?.([
+                    { categoryId: dbCategories?.find(c => c.name === summary.categoryName)?.id || '', categoryName: summary.categoryName, amount: summary.amount }
+                  ]);
+                }
+              }}
+              style={styles.inlineSplitBtn}
+            >
+              <Split size={14} color={colors.primary} style={{ marginRight: 4 }} />
+              <Text style={styles.inlineSplitText}>Split</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.tagPanel}>
+            <TouchableOpacity
+              onPress={() => {
+                const newNote = note.replace(/\[.*\]/g, '').trim();
+                onClearTags?.();
                 setNote(newNote);
               }}
-              style={[styles.bucketChip, !selectedTagId && styles.bucketChipActive]}
+              style={[styles.tagCard, selectedTagIds.length === 0 && { backgroundColor: `${colors.primary} 10`, borderColor: colors.primary }]}
             >
-              <Text style={[styles.bucketChipText, !selectedTagId && styles.bucketChipTextActive]}>None</Text>
+              <View style={[styles.tagIcon, { backgroundColor: selectedTagIds.length === 0 ? colors.primary + '15' : '#F1F5F9' }]}>
+                <Layers size={18} color={selectedTagIds.length === 0 ? colors.primary : colors.textSecondary} />
+              </View>
+              <Text style={[styles.tagCardText, selectedTagIds.length === 0 && { color: colors.primary, fontWeight: '700' }]}>None</Text>
             </TouchableOpacity>
 
-            {(availableTags || []).map(tag => (
-              <TouchableOpacity
-                key={tag.id}
-                onPress={() => {
-                  const newNote = note.replace(/\[.*\]/, '').trim();
-                  onSelectTag?.(tag.id);
-                  setNote(`${newNote} [${tag.name}]`.trim());
-                }}
-                style={[styles.bucketChip, selectedTagId === tag.id && styles.bucketChipActive]}
-              >
-                <Layers size={12} color={selectedTagId === tag.id ? colors.surface : colors.textSecondary} style={{ marginRight: 4 }} />
-                <Text style={[styles.bucketChipText, selectedTagId === tag.id && styles.bucketChipTextActive]}>{tag.name}</Text>
-              </TouchableOpacity>
-            ))}
+            {(availableTags || []).map(tag => {
+              const active = selectedTagIds.includes(tag.id);
+              return (
+                <TouchableOpacity
+                  key={tag.id}
+                  onPress={() => {
+                    let newNote = note.trim();
+                    if (active) {
+                      newNote = newNote.replace(`[${tag.name}]`, '').trim();
+                    } else {
+                      newNote = `${newNote} [${tag.name}]`.trim();
+                    }
+                    onSelectTag?.(tag.id);
+                    setNote(newNote.replace(/\s+/g, ' '));
+                  }}
+                  style={[styles.tagCard, active && { backgroundColor: `${colors.primary} 10`, borderColor: colors.primary }]}
+                >
+                  <View style={[styles.tagIcon, { backgroundColor: active ? colors.primary + '15' : '#F1F5F9' }]}>
+                    <Layers size={18} color={active ? colors.primary : colors.textSecondary} />
+                  </View>
+                  <Text style={[styles.tagCardText, active && { color: colors.primary, fontWeight: '700' }]} numberOfLines={1}>
+                    {tag.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
 
             <TouchableOpacity
               onPress={onAddBreakdown}
-              style={[styles.bucketChip, { borderColor: colors.primary, borderStyle: 'dashed' }]}
+              style={[styles.tagCard, { borderStyle: 'dashed' }]}
             >
-              <Plus size={12} color={colors.primary} style={{ marginRight: 4 }} />
-              <Text style={[styles.bucketChipText, { color: colors.primary, fontWeight: '700' }]}>New Tag</Text>
+              <View style={[styles.tagIcon, { backgroundColor: colors.primary + '08' }]}>
+                <Plus size={18} color={colors.primary} />
+              </View>
+              <Text style={[styles.tagCardText, { color: colors.primary, fontWeight: '700' }]}>New Tag</Text>
             </TouchableOpacity>
-          </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {isSplit && (
+        <View style={{ marginBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={styles.subLabel}>Transaction Splits</Text>
+          <TouchableOpacity onPress={() => setIsSplit?.(false)}>
+            <Text style={{ fontSize: 13, color: colors.danger, fontWeight: '600' }}>Cancel Split</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -182,7 +249,7 @@ const NoteStep: React.FC<Props> = ({
                 <View style={styles.splitValidation}>
                   <AlertCircle size={14} color={colors.danger} style={{ marginRight: 6 }} />
                   <Text style={styles.validationText}>
-                    {diff > 0 ? `Unallocated: KES ${diff.toLocaleString()}` : `Overallocated: KES ${Math.abs(diff).toLocaleString()}`}
+                    {diff > 0 ? `Unallocated: KES ${diff.toLocaleString()} ` : `Overallocated: KES ${Math.abs(diff).toLocaleString()} `}
                   </Text>
                 </View>
               );
@@ -197,37 +264,32 @@ const NoteStep: React.FC<Props> = ({
         </View>
       )}
 
-      {/* Category Picker Modal */}
-      <Modal visible={pickerVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Choose Category</Text>
-              <TouchableOpacity onPress={() => setPickerVisible(false)}>
-                <X size={24} color={colors.text} />
+      {/* Category Picker Sheet for Splits */}
+      <SwipeableSheet
+        ref={splitPickerRef}
+        title="Choose Category"
+        snapPoints={['70%']}
+        onDismiss={() => setPickerVisible(false)}
+      >
+        <ScrollView contentContainerStyle={styles.pickerGrid}>
+          {dbCategories && dbCategories.map(cat => {
+            const Icon = getCategoryIcon(cat.name);
+            const color = getCategoryColor(cat.name);
+            return (
+              <TouchableOpacity
+                key={cat.id}
+                style={styles.pickerItem}
+                onPress={() => handleSelectSplitCat(cat)}
+              >
+                <View style={[styles.pickerIcon, { backgroundColor: color + '15' }]}>
+                  <Icon size={24} color={color} />
+                </View>
+                <Text style={styles.pickerText}>{cat.name}</Text>
               </TouchableOpacity>
-            </View>
-            <ScrollView contentContainerStyle={styles.pickerGrid}>
-              {dbCategories && dbCategories.map(cat => {
-                const Icon = getCategoryIcon(cat.name);
-                const color = getCategoryColor(cat.name);
-                return (
-                  <TouchableOpacity
-                    key={cat.id}
-                    style={styles.pickerItem}
-                    onPress={() => handleSelectSplitCat(cat)}
-                  >
-                    <View style={[styles.pickerIcon, { backgroundColor: color + '15' }]}>
-                      <Icon size={24} color={color} />
-                    </View>
-                    <Text style={styles.pickerText}>{cat.name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+            );
+          })}
+        </ScrollView>
+      </SwipeableSheet>
 
       <Text style={styles.subLabel}>Add a note (optional)</Text>
       <TextInput
@@ -259,8 +321,21 @@ const styles = StyleSheet.create({
   },
   summaryContainer: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 24,
     marginTop: 20
+  },
+  inlineSplitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  inlineSplitText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary
   },
   amountRow: {
     flexDirection: 'row',
@@ -326,34 +401,43 @@ const styles = StyleSheet.create({
     marginBottom: 20
   },
   bucketSelectionContainer: {
-    marginBottom: 20,
+    marginBottom: 24,
     marginTop: -10
   },
-  bucketScroll: {
-    gap: 8,
-    paddingRight: 20
-  },
-  bucketChip: {
+  tagPanel: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 2
+  },
+  tagCard: {
+    width: (width - 48 - 16) / 3, // 3 columns with gap and padding
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    padding: 12,
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#E5E7EB'
+    borderColor: '#E5E7EB',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2
   },
-  bucketChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary
+  tagIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6
   },
-  bucketChipText: {
-    fontSize: 13,
+  tagCardText: {
+    fontSize: 11,
     fontWeight: '600',
-    color: colors.textSecondary
-  },
-  bucketChipTextActive: {
-    color: colors.surface
+    color: colors.text,
+    textAlign: 'center'
   },
   requiredBadge: {
     flexDirection: 'row',

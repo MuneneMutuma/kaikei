@@ -18,6 +18,7 @@ import {
 } from 'lucide-react-native';
 import { colors } from "../theme/colors";
 import { typography } from "../theme/typography";
+import { getCategoryIcon, getCategoryColor } from "../utils/categoryHelpers";
 
 const { width } = Dimensions.get('window');
 const ITEM_SIZE = (width - 64) / 3;
@@ -27,37 +28,7 @@ const SPECIAL_ACTIONS = [
   { id: "add_new", name: "New Category", color: colors.textSecondary, icon: Plus, type: 'action' },
 ];
 
-export const getCategoryIcon = (name: string) => {
-  const n = name.toLowerCase();
-  if (n.includes('stock')) return ShoppingBag;
-  if (n.includes('fuel')) return Fuel;
-  if (n.includes('food') || n.includes('meal')) return Utensils;
-  if (n.includes('transport') || n.includes('mate') || n.includes('fare')) return Bus;
-  if (n.includes('rent') || n.includes('home')) return Home;
-  if (n.includes('airtime') || n.includes('data')) return Smartphone;
-  if (n.includes('repair') || n.includes('service')) return Wrench;
-  if (n.includes('health') || n.includes('hospital')) return HeartPulse;
-  if (n.includes('util') || n.includes('kplc') || n.includes('water')) return Zap;
-  if (n.includes('shop')) return ShoppingBasket;
-  if (n.includes('float') || n.includes('mpesa')) return Coins;
-  return MoreHorizontal;
-};
-
-export const getCategoryColor = (name: string) => {
-  const n = name.toLowerCase();
-  if (n.includes('stock')) return "#4CAF50";
-  if (n.includes('fuel')) return "#FF9800";
-  if (n.includes('food') || n.includes('meal')) return "#E91E63";
-  if (n.includes('transport')) return "#2196F3";
-  if (n.includes('rent')) return "#9C27B0";
-  if (n.includes('airtime')) return "#009688";
-  if (n.includes('repair')) return "#795548";
-  if (n.includes('health')) return "#F44336";
-  if (n.includes('util')) return "#607D8B";
-  if (n.includes('shop')) return "#FF5722";
-  if (n.includes('float')) return "#3F51B5";
-  return "#9E9E9E";
-};
+// Helpers are now imported from ../utils/categoryHelpers
 
 const CategoryStep: React.FC<{
   categories: any[];

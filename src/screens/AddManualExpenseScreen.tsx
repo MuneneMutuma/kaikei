@@ -11,16 +11,18 @@ import {
     StatusBar,
     BackHandler,
     Switch,
-    Modal,
-    TextInput
+    TextInput,
+    Keyboard
 } from "react-native";
+import { SwipeableSheet, SwipeableSheetRef } from "../components/common/SwipeableSheet";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { View as MotiView } from 'moti';
 import { Check, ChevronLeft, X, Briefcase, Plus, Layers } from 'lucide-react-native';
 
 import AmountStep from "./AmountStep";
-import CategoryStep, { getCategoryColor, getCategoryIcon } from "./CategoryStep";
+import CategoryStep from "./CategoryStep";
+import { getCategoryColor, getCategoryIcon } from "../utils/categoryHelpers";
 import NoteStep from "./NoteStep";
 import { Category, BudgetBreakdown } from "../services/ledger/Schema";
 
@@ -42,10 +44,21 @@ const AddManualExpenseScreen: React.FC = () => {
     const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
     const [note, setNote] = useState<string>("");
     const [isBusiness, setIsBusiness] = useState(false);
-    const [availableBreakdowns, setAvailableBreakdowns] = useState<(BudgetBreakdown & { itemName: string })[]>([]);
+    const [availableBreakdowns, setAvailableBreakdowns] = useState<BudgetBreakdown[]>([]);
     const [availableTags, setAvailableTags] = useState<{ id: string, name: string }[]>([]);
     const [selectedBreakdownId, setSelectedBreakdownId] = useState<string | null>(null);
-    const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+    const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+
+    // Split State
+    const [isSplit, setIsSplit] = useState(false);
+    const [splits, setSplits] = useState<{
+        categoryId: string,
+        categoryName: string,
+        amount: string,
+        tagId?: string,
+        tagName?: string,
+        budgetBreakdownId?: string
+    }[]>([]);
 
     // Dynamic Tag State
     const [tagModalVisible, setTagModalVisible] = useState(false);
@@ -55,14 +68,18 @@ const AddManualExpenseScreen: React.FC = () => {
     const [saving, setSaving] = useState(false);
 
     const tagInputRef = useRef<TextInput>(null);
+    const tagSheetRef = useRef<SwipeableSheetRef>(null);
 
-    // Auto-focus keyboard when tag modal opens
+    // Auto-focus keyboard when tag sheet opens
     useEffect(() => {
         if (tagModalVisible) {
+            tagSheetRef.current?.present();
             const timer = setTimeout(() => {
                 tagInputRef.current?.focus();
-            }, 150);
+            }, 300);
             return () => clearTimeout(timer);
+        } else {
+            tagSheetRef.current?.dismiss();
         }
     }, [tagModalVisible]);
 
@@ -93,10 +110,33 @@ const AddManualExpenseScreen: React.FC = () => {
     // --- SAVE LOGIC ---
     const saveExpense = async () => {
         if (!amount || !selectedCategory) return;
+
+        const finalAmount = parseFloat(amount);
+        if (isNaN(finalAmount) || finalAmount <= 0) {
+            Alert.alert("Invalid Amount", "Please enter a valid amount.");
+            return;
+        }
+
+        if (isSplit) {
+            const splitTotal = splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+            if (Math.abs(splitTotal - finalAmount) > 0.01) {
+                Alert.alert("Validation Error", "The total of your splits must equal the total transaction amount.");
+                return;
+            }
+        }
+
         setSaving(true);
         try {
-            const finalAmount = parseFloat(amount);
             const date = new Date().toISOString();
+
+            const allocations = isSplit ? splits.map(s => ({
+                categoryId: s.categoryId,
+                tagId: s.tagId,
+                amount: parseFloat(s.amount) || 0,
+                note: s.tagName
+            })) : undefined;
+
+            // 1. Create the Parent Transaction with optional allocations
             await repo.current.addExpense({
                 amount: finalAmount,
                 date: date,
@@ -104,13 +144,16 @@ const AddManualExpenseScreen: React.FC = () => {
                 categoryId: selectedCategory.id,
                 source: 'manual',
                 rawText: '',
-                recipient: selectedCategory.name, // Default to category name for manual entry
+                recipient: selectedCategory.name,
                 type: 'expense',
                 isVerified: true,
                 isBusiness,
                 budgetBreakdownId: selectedBreakdownId || undefined,
-                tagId: selectedTagId || undefined
-            });
+                tagId: selectedTagIds.length > 0 ? selectedTagIds[0] : undefined,
+                tags: selectedTagIds,
+                excludeFromAnalytics: false
+            }, allocations);
+
             navigation.goBack();
         } catch (e) {
             console.error("Failed to save", e);
@@ -149,12 +192,12 @@ const AddManualExpenseScreen: React.FC = () => {
             // Auto-select "General" if it exists
             const generalTag = allTags.find(t => t.name.toLowerCase() === 'general');
             if (generalTag) {
-                setSelectedTagId(generalTag.id);
+                setSelectedTagIds([generalTag.id]);
                 // See if it has a breakdown
                 const matchingBreakdown = data?.breakdowns.find(b => b.tagId === generalTag.id);
                 setSelectedBreakdownId(matchingBreakdown?.id || null);
             } else {
-                setSelectedTagId(null);
+                setSelectedTagIds([]);
                 setSelectedBreakdownId(null);
             }
 
@@ -176,7 +219,7 @@ const AddManualExpenseScreen: React.FC = () => {
             await fetchBreakdowns(selectedCategory.id);
 
             // Select it
-            setSelectedTagId(newTag.id);
+            setSelectedTagIds(prev => prev.includes(newTag.id) ? prev : [...prev, newTag.id]);
             // Link to breakdown if it exists (it won't yet unless we promote it, but fetchBreakdowns handles the check)
             const month = new Date().toISOString().slice(0, 7);
             const data = await budgetRepo.current.getBudgetWithBreakdowns(selectedCategory.id, month, false);
@@ -336,77 +379,77 @@ const AddManualExpenseScreen: React.FC = () => {
                             }}
                             dbCategories={dbCategories}
                             availableTags={availableTags}
-                            selectedTagId={selectedTagId}
+                            selectedTagIds={selectedTagIds}
                             onSelectTag={(tagId) => {
-                                setSelectedTagId(tagId);
+                                setSelectedTagIds(prev => {
+                                    if (prev.includes(tagId)) return prev.filter(t => t !== tagId);
+                                    return [...prev, tagId];
+                                });
                                 // Map to breakdown if planned
                                 const breakdown = availableBreakdowns?.find(b => b.tagId === tagId);
-                                setSelectedBreakdownId(breakdown?.id || null);
+                                if (breakdown) setSelectedBreakdownId(breakdown.id);
+                            }}
+                            onClearTags={() => {
+                                setSelectedTagIds([]);
+                                setSelectedBreakdownId(null);
                             }}
                             onAddBreakdown={() => setTagModalVisible(true)}
+                            isSplit={isSplit}
+                            setIsSplit={setIsSplit}
+                            splits={splits}
+                            setSplits={setSplits}
                         />
                     </MotiView>
                 )}
             </KeyboardAvoidingView>
 
-            {/* Tag Creation Modal */}
-            <Modal
-                visible={tagModalVisible}
-                transparent={true}
-                animationType="fade"
-                onRequestClose={() => setTagModalVisible(false)}
+            {/* Tag Creation Sheet */}
+            <SwipeableSheet
+                ref={tagSheetRef}
+                title="Add Budget Bucket"
+                snapPoints={['60%']}
+                onDismiss={() => setTagModalVisible(false)}
             >
-                <View style={styles.modalOverlay}>
-                    <KeyboardAvoidingView
-                        behavior={Platform.OS === "ios" ? "padding" : undefined}
-                        style={styles.modalContent}
-                    >
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Add Budget Bucket</Text>
-                            <TouchableOpacity onPress={() => setTagModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                                <X size={20} color={colors.textSecondary} />
-                            </TouchableOpacity>
-                        </View>
+                <View style={{ paddingBottom: 20 }}>
+                    <Text style={styles.modalSubtitle}>
+                        Creating a new tag for <Text style={{ fontWeight: 'bold' }}>{selectedCategory?.name}</Text>
+                    </Text>
 
-                        <Text style={styles.modalSubtitle}>
-                            Creating a new tag for <Text style={{ fontWeight: 'bold' }}>{selectedCategory?.name}</Text>
-                        </Text>
+                    <View style={styles.inputWrapper}>
+                        <Layers size={20} color={colors.primary} style={styles.inputIcon} />
+                        <TextInput
+                            ref={tagInputRef}
+                            style={styles.textInput}
+                            placeholder="Bucket name (e.g. Avocado, Fuel, Wifi)"
+                            placeholderTextColor={colors.textSecondary}
+                            value={newTagName}
+                            onChangeText={setNewTagName}
+                            onSubmitEditing={handleAddNewTag}
+                        />
+                    </View>
 
-                        <View style={styles.inputWrapper}>
-                            <Layers size={20} color={colors.primary} style={styles.inputIcon} />
-                            <TextInput
-                                ref={tagInputRef}
-                                style={styles.textInput}
-                                placeholder="Bucket name (e.g. Avocado, Fuel, Wifi)"
-                                placeholderTextColor={colors.textSecondary}
-                                value={newTagName}
-                                onChangeText={setNewTagName}
-                            />
-                        </View>
-
-                        <View style={styles.modalActions}>
-                            <TouchableOpacity
-                                style={styles.cancelBtn}
-                                onPress={() => setTagModalVisible(false)}
-                            >
-                                <Text style={styles.cancelBtnText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.createBtn, !newTagName.trim() && styles.disabledBtnSecondary]}
-                                onPress={handleAddNewTag}
-                                disabled={addingTag || !newTagName.trim()}
-                            >
-                                {addingTag ? <ActivityIndicator size="small" color="#fff" /> : (
-                                    <>
-                                        <Text style={[styles.createBtnText, !newTagName.trim() && { color: colors.textSecondary }]}>Create Tag</Text>
-                                        <Check size={16} color={!newTagName.trim() ? colors.textSecondary : "#0d1b12"} style={{ marginLeft: 4 }} />
-                                    </>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    </KeyboardAvoidingView>
+                    <View style={styles.modalActions}>
+                        <TouchableOpacity
+                            style={styles.cancelBtn}
+                            onPress={() => setTagModalVisible(false)}
+                        >
+                            <Text style={styles.cancelBtnText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.createBtn, !newTagName.trim() && styles.disabledBtnSecondary]}
+                            onPress={handleAddNewTag}
+                            disabled={addingTag || !newTagName.trim()}
+                        >
+                            {addingTag ? <ActivityIndicator size="small" color="#fff" /> : (
+                                <>
+                                    <Text style={[styles.createBtnText, !newTagName.trim() && { color: colors.textSecondary }]}>Create Tag</Text>
+                                    <Check size={16} color={!newTagName.trim() ? colors.textSecondary : "#0d1b12"} style={{ marginLeft: 4 }} />
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    </View>
                 </View>
-            </Modal>
+            </SwipeableSheet>
 
             {/* 3. Footer Actions (No Voice) */}
             <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 20) }]}>
