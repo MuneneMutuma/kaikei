@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { X } from 'lucide-react-native';
@@ -11,76 +12,66 @@ interface DailyBreakdownSheetProps {
 }
 
 export const DailyBreakdownSheet = ({ date, data, onDismiss }: DailyBreakdownSheetProps) => {
-    // If we have a date, we show the modal.
-    if (!date) return null;
+    const sheetRef = React.useRef<SwipeableSheetRef>(null);
 
-    const formattedDate = new Date(date).toLocaleDateString('en-KE', {
+    React.useEffect(() => {
+        if (date) {
+            sheetRef.current?.present();
+        } else {
+            sheetRef.current?.dismiss();
+        }
+    }, [date]);
+
+    const formattedDate = date ? new Date(date).toLocaleDateString('en-KE', {
         weekday: 'long',
         day: 'numeric',
         month: 'long',
-    });
+    }) : '';
 
     const categories = data?.categories || [];
     const total = data?.total || 0;
 
     return (
-        <Modal
-            animationType="fade" // Changed to fade for the backdrop, sheet can animate if needed or just appear
-            transparent={true}
-            visible={!!date}
-            onRequestClose={onDismiss}
+        <SwipeableSheet
+            ref={sheetRef}
+            title={formattedDate}
+            snapPoints={['94%']}
+            onDismiss={onDismiss}
         >
-            <View style={styles.centeredView}>
-                <TouchableOpacity
-                    style={styles.backdrop}
-                    activeOpacity={1}
-                    onPress={onDismiss}
-                />
-                <View style={[styles.sheetContainer, { backgroundColor: colors.surface || 'white' }]}>
-                    <View style={styles.header}>
-                        <View>
-                            <Text style={styles.title}>{formattedDate}</Text>
-                            <Text style={styles.subtitle}>Daily Spending Breakdown</Text>
-                        </View>
-                        <TouchableOpacity onPress={onDismiss} style={styles.closeButton}>
-                            <X size={24} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    </View>
+            <ScrollView contentContainerStyle={styles.listContent}>
+                <Text style={styles.subtitle}>Daily Spending Breakdown</Text>
 
-                    {data === null ? (
-                        <View style={styles.loaderContainer}>
-                            <Text style={styles.loadingText}>Loading details...</Text>
+                {data === null ? (
+                    <View style={styles.loaderContainer}>
+                        <Text style={styles.loadingText}>Loading details...</Text>
+                    </View>
+                ) : categories.length === 0 ? (
+                    <View style={styles.emptyContainer}>
+                        <Text style={styles.emptyText}>No expenses recorded for this day.</Text>
+                    </View>
+                ) : (
+                    <View>
+                        <View style={styles.totalRow}>
+                            <Text style={styles.totalLabel}>Total</Text>
+                            <Text style={styles.totalAmount}>Ksh {total.toLocaleString()}</Text>
                         </View>
-                    ) : categories.length === 0 ? (
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>No expenses recorded for this day.</Text>
-                        </View>
-                    ) : (
-                        <View style={{ maxHeight: 400 }}>
-                            <View style={styles.totalRow}>
-                                <Text style={styles.totalLabel}>Total</Text>
-                                <Text style={styles.totalAmount}>Ksh {total.toLocaleString()}</Text>
-                            </View>
-                            <FlatList
-                                data={categories}
-                                keyExtractor={(item) => item.name}
-                                renderItem={({ item }) => (
-                                    <View style={styles.row}>
-                                        <View style={styles.categoryInfo}>
-                                            <View style={[styles.dot, { backgroundColor: item.color || colors.primary }]} />
-                                            <Text style={styles.categoryName}>{item.name}</Text>
-                                        </View>
-                                        <Text style={styles.amount}>Ksh {item.total.toLocaleString()}</Text>
+
+                        {categories.map((item: any, index: number) => (
+                            <React.Fragment key={item.name}>
+                                <View style={styles.row}>
+                                    <View style={styles.categoryInfo}>
+                                        <View style={[styles.dot, { backgroundColor: item.color || colors.primary }]} />
+                                        <Text style={styles.categoryName}>{item.name}</Text>
                                     </View>
-                                )}
-                                ItemSeparatorComponent={() => <View style={styles.separator} />}
-                                contentContainerStyle={styles.listContent}
-                            />
-                        </View>
-                    )}
-                </View>
-            </View>
-        </Modal>
+                                    <Text style={styles.amount}>Ksh {item.total.toLocaleString()}</Text>
+                                </View>
+                                {index < categories.length - 1 && <View style={styles.separator} />}
+                            </React.Fragment>
+                        ))}
+                    </View>
+                )}
+            </ScrollView>
+        </SwipeableSheet>
     );
 };
 
@@ -136,7 +127,7 @@ const styles = StyleSheet.create({
     },
     listContent: {
         paddingHorizontal: 20,
-        paddingBottom: 20,
+        paddingBottom: 150,
     },
     row: {
         flexDirection: 'row',

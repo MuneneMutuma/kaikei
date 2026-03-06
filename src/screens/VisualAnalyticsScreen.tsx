@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions, TouchableOpacity, ActivityIndicator, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, TouchableOpacity, ActivityIndicator, FlatList } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from '../components/common/SwipeableSheet';
 import { PieChart, BarChart } from 'react-native-gifted-charts';
 import { ExpenseRepository } from '../services/ledger/ExpenseRepository';
 import { Expense } from '../services/ledger/Schema';
 import { colors } from '../theme/colors';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ChevronLeft, ChevronRight, TrendingUp, X, ShoppingBag, Calendar, Eye, EyeOff } from 'lucide-react-native';
-import { getCategoryIcon, getCategoryColor } from './AnalyticsScreen';
+import { getCategoryIcon, getCategoryColor } from '../utils/categoryHelpers';
 import { TransactionRow } from '../components/TransactionRow';
 import { TransactionDetailModal } from '../components/TransactionDetailModal';
 import { MonthPicker } from '../components/MonthPicker';
@@ -31,6 +32,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
 
     const [selectedTx, setSelectedTx] = useState<Expense | null>(null);
     const [detailModalVisible, setDetailModalVisible] = useState(false);
+    const dailySheetRef = React.useRef<SwipeableSheetRef>(null);
 
     useEffect(() => {
         loadData();
@@ -192,6 +194,7 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
                         items: dailyItems[date] || []
                     });
                     setModalVisible(true);
+                    dailySheetRef.current?.present();
                 }
             };
         });
@@ -361,48 +364,39 @@ const VisualAnalyticsScreen = ({ navigation, route }: any) => {
             </ScrollView>
 
             {/* Daily Details Modal */}
-            <Modal
-                visible={modalVisible}
-                animationType="slide"
-                transparent={true}
-                statusBarTranslucent
-                onRequestClose={() => setModalVisible(false)}
+            <SwipeableSheet
+                ref={dailySheetRef}
+                title="Daily Breakdown"
+                snapPoints={['50%', '80%']}
+                onDismiss={() => setModalVisible(false)}
             >
-                <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) + 10, backgroundColor: 'white' }]}>
-                        <View style={styles.modalHeader}>
-                            <View>
-                                <Text style={styles.modalTitle}>Daily Breakdown</Text>
-                                <Text style={styles.modalSubtitle}>{selectedDayExpenses?.date}</Text>
-                            </View>
-                            <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
-                                <X size={24} color="#0d1b12" />
-                            </TouchableOpacity>
-                        </View>
-
-                        <FlatList
-                            data={selectedDayExpenses?.items || []}
-                            keyExtractor={item => item.id}
-                            contentContainerStyle={{ padding: 16 }}
-                            ListEmptyComponent={
-                                <View style={{ alignItems: 'center', padding: 20 }}>
-                                    <Text style={{ color: '#64748b' }}>No expenses for this day.</Text>
-                                </View>
-                            }
-                            renderItem={({ item }) => (
-                                <TransactionRow
-                                    item={item}
-                                    onPress={(item) => {
-                                        setSelectedTx(item);
-                                        setDetailModalVisible(true);
-                                    }}
-                                    showDate={false}
-                                />
-                            )}
-                        />
+                <View>
+                    <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
+                        <Text style={styles.modalSubtitle}>{selectedDayExpenses?.date}</Text>
                     </View>
+
+                    <FlatList
+                        data={selectedDayExpenses?.items || []}
+                        keyExtractor={(item: Expense) => item.id}
+                        contentContainerStyle={{ padding: 16, paddingBottom: 150 }}
+                        ListEmptyComponent={
+                            <View style={{ alignItems: 'center', padding: 20 }}>
+                                <Text style={{ color: '#64748b' }}>No expenses for this day.</Text>
+                            </View>
+                        }
+                        renderItem={({ item }: { item: Expense }) => (
+                            <TransactionRow
+                                item={item}
+                                onPress={(tx: Expense) => {
+                                    setSelectedTx(tx);
+                                    setDetailModalVisible(true);
+                                }}
+                                showDate={false}
+                            />
+                        )}
+                    />
                 </View>
-            </Modal>
+            </SwipeableSheet>
 
             <TransactionDetailModal
                 visible={detailModalVisible}

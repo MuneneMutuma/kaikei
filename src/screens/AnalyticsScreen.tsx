@@ -7,6 +7,7 @@ import { colors } from "../theme/colors";
 import { ScreenHeader } from "../components/ScreenHeader";
 import { TransactionRow } from "../components/TransactionRow";
 import { TransactionDetailModal } from "../components/TransactionDetailModal";
+import { getCategoryIcon, getCategoryColor } from "../utils/categoryHelpers";
 import {
     Search,
     Filter,
@@ -46,26 +47,7 @@ const getDateLabel = (dateStr: string) => {
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
-// Category Icon Helper (Reused logic, inline for self-containment or could import)
-export const getCategoryIcon = (name?: string | null) => {
-    const n = (name || 'Other').toLowerCase();
-    if (n.includes('stock')) return ShoppingBasket;
-    if (n.includes('fuel')) return Fuel;
-    if (n.includes('food')) return Utensils;
-    if (n.includes('transport')) return Bus;
-    if (n.includes('util')) return Zap;
-    if (n.includes('airtime')) return Smartphone;
-    return MoreHorizontal;
-};
-
-export const getCategoryColor = (name?: string | null) => {
-    const n = (name || 'Other').toLowerCase();
-    if (n.includes('stock')) return "#10B981";
-    if (n.includes('fuel')) return "#3B82F6";
-    if (n.includes('food')) return "#F59E0B";
-    if (n.includes('transport')) return "#8B5CF6";
-    return "#64748B"; // Default gray
-};
+// Helpers are now imported from ../utils/categoryHelpers
 
 import { LucideIcon } from 'lucide-react-native';
 
