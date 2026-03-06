@@ -87,6 +87,9 @@ export class Database {
           isVerified BOOLEAN DEFAULT 0,
           synced BOOLEAN DEFAULT 0,
           isBusiness BOOLEAN DEFAULT 0,
+          parentId TEXT DEFAULT NULL,
+          budgetBreakdownId TEXT DEFAULT NULL,
+          tagId TEXT DEFAULT NULL,
           FOREIGN KEY(categoryId) REFERENCES categories(id)
         );
       `);
@@ -116,6 +119,7 @@ export class Database {
           budgetId TEXT NOT NULL,
           categoryId TEXT NOT NULL,
           limitAmount REAL NOT NULL,
+          isLocked BOOLEAN DEFAULT 0,
           FOREIGN KEY(budgetId) REFERENCES budgets(id) ON DELETE CASCADE,
           FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
           UNIQUE(budgetId, categoryId)
@@ -140,9 +144,38 @@ export class Database {
             budgetLineId TEXT NOT NULL,
             tagId TEXT NOT NULL,
             plannedAmount REAL NOT NULL,
-            FOREIGN KEY(budgetLineId) REFERENCES budget_lines(id) ON DELETE CASCADE,
-            FOREIGN KEY(tagId) REFERENCES category_tags(id) ON DELETE CASCADE,
+            actualAmount REAL DEFAULT NULL,
+            isUnplanned BOOLEAN DEFAULT 0,
+            FOREIGN KEY(budgetLineId) REFERENCES budget_lines(?),
+            FOREIGN KEY(tagId) REFERENCES category_tags(?),
             UNIQUE(budgetLineId, tagId)
+          );
+        `);
+
+        // Create Expense Allocations Table for Parent-Child Splitting
+        db.execute(`
+          CREATE TABLE IF NOT EXISTS expense_allocations (
+            id TEXT PRIMARY KEY NOT NULL,
+            expenseId TEXT NOT NULL,
+            categoryId TEXT NOT NULL,
+            tagId TEXT,
+            amount REAL NOT NULL,
+            note TEXT,
+            FOREIGN KEY(expenseId) REFERENCES expenses(id) ON DELETE CASCADE,
+            FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE CASCADE,
+            FOREIGN KEY(tagId) REFERENCES category_tags(id) ON DELETE SET NULL
+          );
+        `);
+
+        // Create Expense Tags Table for Contextual Multi-Tagging
+        db.execute(`
+          CREATE TABLE IF NOT EXISTS expense_tags (
+            id TEXT PRIMARY KEY NOT NULL,
+            expenseId TEXT NOT NULL,
+            tagId TEXT NOT NULL,
+            FOREIGN KEY(expenseId) REFERENCES expenses(id) ON DELETE CASCADE,
+            FOREIGN KEY(tagId) REFERENCES category_tags(id) ON DELETE CASCADE,
+            UNIQUE(expenseId, tagId)
           );
         `);
 
@@ -227,40 +260,40 @@ export class Database {
 
           if (!existingColumns.has('isVerified')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN isVerified BOOLEAN DEFAULT 0');
+              await db.execute('ALTER TABLE expenses ADD COLUMN isVerified BOOLEAN DEFAULT 0');
             } catch (e) { /* ignore duplicate column error */ }
           }
 
           if (!existingColumns.has('synced')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN synced BOOLEAN DEFAULT 0');
+              await db.execute('ALTER TABLE expenses ADD COLUMN synced BOOLEAN DEFAULT 0');
             } catch (e) { /* ignore duplicate column error */ }
           }
 
           if (!existingColumns.has('isBusiness')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN isBusiness BOOLEAN DEFAULT 0');
+              await db.execute('ALTER TABLE expenses ADD COLUMN isBusiness BOOLEAN DEFAULT 0');
               console.log("Migrated: Added isBusiness column");
             } catch (e) { /* ignore duplicate column error */ }
           }
 
           if (!existingColumns.has('parentId')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN parentId TEXT DEFAULT NULL');
+              await db.execute('ALTER TABLE expenses ADD COLUMN parentId TEXT DEFAULT NULL');
               console.log("Migrated: Added parentId column to expenses");
             } catch (e) { /* ignore duplicate column error */ }
           }
 
           if (!existingColumns.has('budgetBreakdownId')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN budgetBreakdownId TEXT DEFAULT NULL');
+              await db.execute('ALTER TABLE expenses ADD COLUMN budgetBreakdownId TEXT DEFAULT NULL');
               console.log("Migrated: Added budgetBreakdownId column to expenses");
             } catch (e) { /* ignore duplicate column error */ }
           }
 
           if (!existingColumns.has('tagId')) {
             try {
-              db.execute('ALTER TABLE expenses ADD COLUMN tagId TEXT DEFAULT NULL');
+              await db.execute('ALTER TABLE expenses ADD COLUMN tagId TEXT DEFAULT NULL');
               console.log("Migrated: Added tagId column to expenses");
             } catch (e) { /* ignore duplicate column error */ }
           }
@@ -319,6 +352,87 @@ export class Database {
             }
           } catch (e) {
             console.warn("Global Tagging migration failed", e);
+          }
+
+          // 4. actualAmount Migration for budget_breakdowns
+          try {
+            const bbInfo = db.execute('PRAGMA table_info(budget_breakdowns)');
+            const columns = Database.getRows(bbInfo);
+            const hasActualAmount = columns.some((c: any) => c.name === 'actualAmount');
+            if (!hasActualAmount) {
+              db.execute('ALTER TABLE budget_breakdowns ADD COLUMN actualAmount REAL DEFAULT NULL');
+              console.log("Migrated: Added actualAmount to budget_breakdowns");
+            }
+          } catch (e) {
+            console.warn("actualAmount migration failed", e);
+          }
+
+          // 5. isLocked Migration for budget_lines
+          try {
+            const blInfo = db.execute('PRAGMA table_info(budget_lines)');
+            const columns = Database.getRows(blInfo);
+            const hasIsLocked = columns.some((c: any) => c.name === 'isLocked');
+            if (!hasIsLocked) {
+              db.execute('ALTER TABLE budget_lines ADD COLUMN isLocked BOOLEAN DEFAULT 0');
+              console.log("Migrated: Added isLocked to budget_lines");
+            }
+          } catch (e) {
+            console.warn("isLocked migration failed", e);
+          }
+
+          // 6. isUnplanned Migration for budget_breakdowns
+          try {
+            const bbInfo = db.execute('PRAGMA table_info(budget_breakdowns)');
+            const columns = Database.getRows(bbInfo);
+            const hasIsUnplanned = columns.some((c: any) => c.name === 'isUnplanned');
+            if (!hasIsUnplanned) {
+              db.execute('ALTER TABLE budget_breakdowns ADD COLUMN isUnplanned BOOLEAN DEFAULT 0');
+              // Legacy classification: If plannedAmount was 0, it was unplanned
+              db.execute('UPDATE budget_breakdowns SET isUnplanned = 1 WHERE plannedAmount = 0');
+              console.log("Migrated: Added isUnplanned to budget_breakdowns");
+            }
+          } catch (e) {
+            console.warn("isUnplanned migration failed", e);
+          }
+
+          // 7. Tag Deduplication & Case Insensitivity Migration
+          try {
+            console.log("Starting Tag Deduplication Migration...");
+
+            const allTagsResult = db.execute('SELECT id, categoryId, name FROM category_tags');
+            const allTags = Database.getRows(allTagsResult) as { id: string, name: string, categoryId: string }[];
+            const tagMap = new Map<string, { id: string, name: string, categoryId: string }[]>();
+
+            // Group tags by categoryId + lowercase name
+            allTags.forEach((tag: any) => {
+              const key = `${tag.categoryId}:${tag.name.trim().toLowerCase()}`;
+              if (!tagMap.has(key)) tagMap.set(key, []);
+              tagMap.get(key)?.push(tag);
+            });
+
+            for (const [key, duplicates] of tagMap.entries()) {
+              if (duplicates.length > 1) {
+                // Keep the first ID as the canonical one
+                const canonical = duplicates[0];
+                const toDelete = duplicates.slice(1);
+
+                for (const redundant of toDelete) {
+                  console.log(`Merging tag "${redundant.name}" -> "${canonical.name}" in category ${redundant.categoryId}`);
+
+                  // Update all foreign key references
+                  db.execute('UPDATE expenses SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                  db.execute('UPDATE expense_allocations SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                  db.execute('UPDATE budget_breakdowns SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                  db.execute('UPDATE expense_tags SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+
+                  // Delete the redundant tag
+                  db.execute('DELETE FROM category_tags WHERE id = ?', [redundant.id]);
+                }
+              }
+            }
+            console.log("Tag Deduplication Migration completed.");
+          } catch (e) {
+            console.warn("Tag deduplication migration failed", e);
           }
         } catch (e) {
           console.warn("Migration check failed", e);

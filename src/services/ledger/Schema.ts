@@ -25,8 +25,25 @@ export interface Expense {
     recipient?: string;
     account?: string; // e.g. M-Shwari, Pochi, KCB
     parentId?: string; // New: For Transaction Splitting (links to parent transactionId or id)
-    budgetBreakdownId?: string; // Link to a specific budget breakdown/bucket
-    tagId?: string; // New: Link to a permanent category tag
+    budgetBreakdownId?: string | null; // Link to a specific budget breakdown/bucket
+    tagId?: string | null; // Legacy field
+    tags?: string[]; // Phase 16: Array of Tag IDs for Contextual Multi-Tagging
+    allocations?: ExpenseAllocation[]; // New: Parent-Child splitting
+}
+
+export interface ExpenseTag {
+    id: string;
+    expenseId: string;
+    tagId: string;
+}
+
+export interface ExpenseAllocation {
+    id: string;
+    expenseId: string;    // FK to expenses table
+    categoryId: string;   // Specific category for this split
+    tagId?: string;       // Optional specific tag for this split
+    amount: number;
+    note?: string;        // Optional sub-note
 }
 
 export interface Budget {
@@ -43,8 +60,10 @@ export interface BudgetLine {
     limitAmount: number;
     // For UI convenience in joined queries:
     categoryName?: string;
-    spentAmount?: number;
+    spentAmount?: number; // From M-Pesa Ledger
+    itemizedAmount?: number; // Phase 16: From Sandbox Breakdowns (actualAmount)
     isUnplanned?: boolean;
+    isLocked?: boolean; // Phase 19b: For budget discipline
 }
 
 export interface BudgetBreakdown {
@@ -52,6 +71,10 @@ export interface BudgetBreakdown {
     budgetLineId: string; // FK to budget_lines
     tagId: string;        // FK to category_tags
     plannedAmount: number;
+    actualAmount?: number; // Phase 16: Sandbox manual tracking
+    isUnplanned?: boolean; // Phase 23: Deterministic section logic
+    tagName?: string;     // Joined for UI convenience
+    linkedAmount?: number; // Phase 24: Live linked transaction total
 }
 
 export interface CategoryTag {

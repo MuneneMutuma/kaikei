@@ -84,8 +84,43 @@ export class BudgetRepository {
         // 1. Ensure a budget exists for this month
         const budget = await this.getOrCreateBudget(monthStr, 'monthly');
 
-        // 2. Query budget lines JOINED with categories and SUM of expenses
+        const effectiveExpensesCTE = `
+            WITH AllocatedTotals AS (
+                SELECT expenseId, SUM(amount) as totalAllocated
+                FROM expense_allocations
+                GROUP BY expenseId
+            ),
+            EffectiveExpenses AS (
+                -- 1. Unsplit expenses OR the unallocated remainder of split expenses
+                SELECT 
+                    e.id, 
+                    e.categoryId, 
+                    e.type, 
+                    e.excludeFromAnalytics, 
+                    e.date, 
+                    (e.amount - COALESCE(at.totalAllocated, 0)) as effectiveAmount
+                FROM expenses e
+                LEFT JOIN AllocatedTotals at ON e.id = at.expenseId
+                WHERE (e.amount - COALESCE(at.totalAllocated, 0)) > 0
+                
+                UNION ALL
+                
+                -- 2. The allocations themselves
+                SELECT 
+                    ea.id, 
+                    ea.categoryId, 
+                    e.type, 
+                    e.excludeFromAnalytics, 
+                    e.date,
+                    ea.amount as effectiveAmount
+                FROM expense_allocations ea
+                JOIN expenses e ON ea.expenseId = e.id
+            )
+        `;
+
+        // 2. Query budget lines JOINED with categories and SUM of effective expenses
         const plannedQuery = `
+            ${effectiveExpensesCTE}
             SELECT 
                 bl.id,
                 bl.budgetId,
@@ -93,13 +128,17 @@ export class BudgetRepository {
                 bl.limitAmount,
                 c.name as categoryName,
                 COALESCE(
-                    (SELECT SUM(amount) FROM expenses e 
+                    (SELECT SUM(effectiveAmount) FROM EffectiveExpenses e 
                      WHERE e.categoryId = bl.categoryId 
                      AND e.type = 'expense'
                      AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
                      AND datetime(e.date, 'localtime') LIKE ?)
                 , 0) as spentAmount,
-                0 as isUnplanned
+                COALESCE(
+                    (SELECT SUM(actualAmount) FROM budget_breakdowns bb WHERE bb.budgetLineId = bl.id)
+                , 0) as itemizedAmount,
+                0 as isUnplanned,
+                bl.isLocked
             FROM budget_lines bl
             JOIN categories c ON bl.categoryId = c.id
             WHERE bl.budgetId = ?
@@ -107,16 +146,19 @@ export class BudgetRepository {
 
         // 3. Query "Ghost" spending (categories with spend but no budget line)
         const unplannedQuery = `
+            ${effectiveExpensesCTE}
             SELECT 
                 NULL as id,
                 ? as budgetId,
                 c.id as categoryId,
                 0 as limitAmount,
                 c.name as categoryName,
-                SUM(e.amount) as spentAmount,
-                1 as isUnplanned
+                SUM(e.effectiveAmount) as spentAmount,
+                0 as itemizedAmount,
+                1 as isUnplanned,
+                0 as isLocked
             FROM categories c
-            JOIN expenses e ON c.id = e.categoryId
+            JOIN EffectiveExpenses e ON c.id = e.categoryId
             LEFT JOIN budget_lines bl ON c.id = bl.categoryId AND bl.budgetId = ?
             WHERE bl.id IS NULL
             AND datetime(e.date, 'localtime') LIKE ?
@@ -142,8 +184,9 @@ export class BudgetRepository {
      */
     public async getBudgetLine(categoryId: string, month: string): Promise<BudgetLine | null> {
         const result = await this.db.execute(
-            `SELECT bl.* FROM budget_lines bl
+            `SELECT bl.*, c.name as categoryName FROM budget_lines bl
              JOIN budgets b ON bl.budgetId = b.id
+             JOIN categories c ON bl.categoryId = c.id
              WHERE bl.categoryId = ? AND b.period = ? LIMIT 1`,
             [categoryId, month]
         );
@@ -155,7 +198,7 @@ export class BudgetRepository {
      * Find a budget line and its breakdowns for a category.
      * If none exist, returns a virtual general breakdown if requested.
      */
-    public async getBudgetWithBreakdowns(categoryId: string, month: string, createIfMissing = false): Promise<{ line: BudgetLine, breakdowns: (BudgetBreakdown & { itemName: string })[] } | null> {
+    public async getBudgetWithBreakdowns(categoryId: string, month: string, createIfMissing = false): Promise<{ line: BudgetLine, breakdowns: BudgetBreakdown[] } | null> {
         let line = await this.getBudgetLine(categoryId, month);
 
         if (!line && createIfMissing) {
@@ -170,7 +213,7 @@ export class BudgetRepository {
         if (breakdowns.length === 0 && createIfMissing) {
             const generalTag = await this.getOrCreateTag(categoryId, 'General');
             const general = await this.ensureBreakdown(line.id, generalTag.id);
-            return { line, breakdowns: [{ ...general, itemName: 'General' }] };
+            return { line, breakdowns: [{ ...general, tagName: 'General' }] };
         }
 
         return { line, breakdowns };
@@ -232,37 +275,126 @@ export class BudgetRepository {
     /**
      * Fetch planning breakdowns for a specific budget line
      */
-    public async getBudgetBreakdowns(budgetLineId: string): Promise<(BudgetBreakdown & { itemName: string })[]> {
+    public async getBudgetBreakdowns(budgetLineId: string): Promise<BudgetBreakdown[]> {
+        // We need to fetch the month from the parent line to filter expenses
+        const lineRes = await this.db.execute(
+            `SELECT bl.categoryId, b.period 
+             FROM budget_lines bl 
+             JOIN budgets b ON bl.budgetId = b.id 
+             WHERE bl.id = ?`,
+            [budgetLineId]
+        );
+        const lineMeta = Database.getRows(lineRes)[0];
+        if (!lineMeta) return [];
+
+        const monthStr = lineMeta.period; // "YYYY-MM"
+
         const result = await this.db.execute(
-            `SELECT bb.*, ct.name as itemName 
+            `SELECT 
+                bb.*, 
+                ct.name as rawTagName,
+                -- 1. Sum expenses linked to this tag (direct or via multi-tag table)
+                (SELECT COALESCE(SUM(e.amount), 0) 
+                 FROM expenses e 
+                 WHERE (e.tagId = bb.tagId OR EXISTS (SELECT 1 FROM expense_tags et WHERE et.expenseId = e.id AND et.tagId = bb.tagId))
+                 AND datetime(e.date, 'localtime') LIKE ? 
+                 AND e.type = 'expense'
+                 AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+                ) as linkedExpenseTotal,
+                -- 2. Sum splits/allocations linked to this tag
+                (SELECT COALESCE(SUM(ea.amount), 0) 
+                 FROM expense_allocations ea
+                 JOIN expenses e ON ea.expenseId = e.id
+                 WHERE ea.tagId = bb.tagId
+                 AND datetime(e.date, 'localtime') LIKE ?
+                 AND e.type = 'expense'
+                 AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+                ) as linkedAllocationTotal
              FROM budget_breakdowns bb 
              JOIN category_tags ct ON bb.tagId = ct.id
              WHERE bb.budgetLineId = ?
              ORDER BY ct.name ASC`,
-            [budgetLineId]
+            [`${monthStr}%`, `${monthStr}%`, budgetLineId]
         );
-        return Database.getRows(result) as (BudgetBreakdown & { itemName: string })[];
+
+        const rows = Database.getRows(result);
+        return rows.map((r: any) => {
+            const linked = (r.linkedExpenseTotal || 0) + (r.linkedAllocationTotal || 0);
+            return {
+                ...r,
+                tagName: this.formatTagName(r.rawTagName),
+                isUnplanned: !!r.isUnplanned,
+                // actualAmount is now EXCLUSIVELY the manual input from the UI
+                actualAmount: r.actualAmount || 0,
+                // linkedAmount is the live M-Pesa total for verification
+                linkedAmount: linked
+            };
+        }) as BudgetBreakdown[];
+    }
+
+    private formatTagName(name: string): string {
+        if (!name) return "";
+        return name.split(' ').map(sub => sub.charAt(0).toUpperCase() + sub.slice(1).toLowerCase()).join(' ');
     }
 
     /**
-     * Save planning breakdowns for a budget line.
-     * This replaces all existing breakdowns for the line to ensure sync.
-     */
-    public async saveBudgetBreakdowns(budgetLineId: string, items: { tagId: string, plannedAmount: number }[]): Promise<void> {
+ * Save planning breakdowns for a budget line.
+ * This replaces all existing breakdowns for the line to ensure sync.
+ * Preserves actualAmount if provided in the items.
+ */
+    public async saveBudgetBreakdowns(budgetLineId: string, items: { tagId: string, plannedAmount: number, actualAmount?: number | null }[]): Promise<void> {
         try {
             await this.db.execute('DELETE FROM budget_breakdowns WHERE budgetLineId = ?', [budgetLineId]);
 
-            for (const { tagId, plannedAmount } of items) {
+            for (const { tagId, plannedAmount, actualAmount } of items) {
                 const id = uuidv4();
                 await this.db.execute(
-                    `INSERT INTO budget_breakdowns (id, budgetLineId, tagId, plannedAmount) VALUES (?, ?, ?, ?)`,
-                    [id, budgetLineId, tagId, plannedAmount]
+                    `INSERT INTO budget_breakdowns (id, budgetLineId, tagId, plannedAmount, actualAmount) VALUES (?, ?, ?, ?, ?)`,
+                    [id, budgetLineId, tagId, plannedAmount, actualAmount ?? null]
                 );
             }
         } catch (e) {
             console.error("Failed to save budget breakdowns", e);
             throw e;
         }
+    }
+
+    /**
+     * Add a single breakdown item.
+     */
+    public async addBreakdownItem(budgetLineId: string, tagId: string, plannedAmount: number, actualAmount: number = 0, isUnplanned: boolean = false): Promise<void> {
+        const id = uuidv4();
+        await this.db.execute(
+            `INSERT INTO budget_breakdowns (id, budgetLineId, tagId, plannedAmount, actualAmount, isUnplanned) VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, budgetLineId, tagId, plannedAmount, actualAmount, isUnplanned ? 1 : 0]
+        );
+    }
+
+    /**
+     * Delete a single breakdown item.
+     */
+    public async deleteBreakdownItem(breakdownId: string): Promise<void> {
+        await this.db.execute('DELETE FROM budget_breakdowns WHERE id = ?', [breakdownId]);
+    }
+
+    /**
+     * Update the plannedAmount for a specific breakdown item.
+     */
+    public async updateBreakdownPlannedAmount(breakdownId: string, plannedAmount: number): Promise<void> {
+        await this.db.execute(
+            'UPDATE budget_breakdowns SET plannedAmount = ? WHERE id = ?',
+            [plannedAmount, breakdownId]
+        );
+    }
+
+    /**
+     * Update the actualAmount for a specific breakdown item in the Sandbox.
+     */
+    public async updateBreakdownActualAmount(breakdownId: string, actualAmount: number): Promise<void> {
+        await this.db.execute(
+            'UPDATE budget_breakdowns SET actualAmount = ? WHERE id = ?',
+            [actualAmount, breakdownId]
+        );
     }
 
     /**
@@ -316,29 +448,37 @@ export class BudgetRepository {
         });
     }
 
-    /**
-     * Add a single breakdown item to a budget line.
-     * Useful for dynamic creation from expense entry flows.
-     */
-    public async addBreakdownItem(budgetLineId: string, itemName: string, categoryId: string, plannedAmount: number = 0): Promise<BudgetBreakdown> {
-        const tag = await this.getOrCreateTag(categoryId, itemName);
-        return this.ensureBreakdown(budgetLineId, tag.id);
-    }
+
 
     /**
      * Get or create a global tag for a category.
+     * Normalizes names to Title Case and handles case-insensitive lookup.
      */
     public async getOrCreateTag(categoryId: string, name: string): Promise<{ id: string, categoryId: string, name: string }> {
+        const trimmedName = name.trim();
+
+        // Try to find existing first (case-insensitive)
+        const existing = await this.db.execute(
+            'SELECT * FROM category_tags WHERE categoryId = ? AND name = ? COLLATE NOCASE LIMIT 1',
+            [categoryId, trimmedName]
+        );
+        const rows = Database.getRows(existing);
+        if (rows.length > 0) {
+            return rows[0];
+        }
+
         const id = uuidv4();
         await this.db.execute(
             'INSERT OR IGNORE INTO category_tags (id, categoryId, name) VALUES (?, ?, ?)',
-            [id, categoryId, name.trim()]
+            [id, categoryId, trimmedName]
         );
-        const result = await this.db.execute(
-            'SELECT * FROM category_tags WHERE categoryId = ? AND name = ?',
-            [categoryId, name.trim()]
+
+        // Return the one that exists (might be the one we just inserted or a concurrent one)
+        const final = await this.db.execute(
+            'SELECT * FROM category_tags WHERE categoryId = ? AND name = ? COLLATE NOCASE',
+            [categoryId, trimmedName]
         );
-        return Database.getRows(result)[0];
+        return Database.getRows(final)[0];
     }
 
     /**
@@ -349,6 +489,232 @@ export class BudgetRepository {
             'SELECT id, name FROM category_tags WHERE categoryId = ? ORDER BY name ASC',
             [categoryId]
         );
+        return Database.getRows(result);
+    }
+
+    /**
+     * Rigorous Deduplication and Trimming of Tags
+     * Designed to be triggered manually to clean up stubborn databases.
+     */
+    public async deduplicateAndTrimTags(): Promise<{ merged: number, deleted: number }> {
+        const db = this.db;
+        let mergedCount = 0;
+        let deletedCount = 0;
+
+        try {
+            await db.execute('BEGIN TRANSACTION');
+
+            // 1. Fetch all existing tags
+            const allTagsResult = await db.execute('SELECT id, categoryId, name FROM category_tags');
+            const allTags = Database.getRows(allTagsResult);
+
+            const tagMap = new Map<string, { id: string, name: string, categoryId: string }[]>();
+
+            // 2. Group them by categoryId and heavily normalized name
+            allTags.forEach((tag: any) => {
+                const normalizedName = tag.name.trim().toLowerCase();
+                const key = `${tag.categoryId}:${normalizedName}`;
+                if (!tagMap.has(key)) tagMap.set(key, []);
+                tagMap.get(key)?.push(tag);
+            });
+
+            // 3. Process groups
+            for (const [key, duplicates] of tagMap.entries()) {
+                // If there's only one tag, just ensure it's trimmed in the DB
+                if (duplicates.length === 1) {
+                    const single = duplicates[0];
+                    const trimmed = single.name.trim();
+                    if (single.name !== trimmed) {
+                        await db.execute('UPDATE category_tags SET name = ? WHERE id = ?', [trimmed, single.id]);
+                    }
+                    continue;
+                }
+
+                // If >1 tag, we need to merge
+                // Pick the first one as canonical. Better yet, pick the one that is already Title Case if possible.
+                // For simplicity, we just take the first, but we ensure its name is trimmed.
+                const canonical = duplicates[0];
+                const canonicalTrimmedName = canonical.name.trim();
+
+                const toDelete = duplicates.slice(1);
+
+                // Ensure the canonical one is clean
+                if (canonical.name !== canonicalTrimmedName) {
+                    await db.execute('UPDATE category_tags SET name = ? WHERE id = ?', [canonicalTrimmedName, canonical.id]);
+                }
+
+                for (const redundant of toDelete) {
+                    // Update all references
+                    await db.execute('UPDATE expenses SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                    await db.execute('UPDATE expense_allocations SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                    await db.execute('UPDATE budget_breakdowns SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                    await db.execute('UPDATE expense_tags SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+
+                    // Delete the redundant tag
+                    await db.execute('DELETE FROM category_tags WHERE id = ?', [redundant.id]);
+
+                    mergedCount++;
+                    deletedCount++;
+                }
+            }
+
+            await db.execute('COMMIT');
+            return { merged: mergedCount, deleted: deletedCount };
+        } catch (e) {
+            await db.execute('ROLLBACK');
+            console.error("Deduplication failed", e);
+            throw e;
+        }
+    }
+
+    /**
+     * Toggle the lock status of a budget line.
+     */
+    public async toggleBudgetLock(lineId: string, isLocked: boolean): Promise<void> {
+        await this.db.execute(
+            'UPDATE budget_lines SET isLocked = ? WHERE id = ?',
+            [isLocked ? 1 : 0, lineId]
+        );
+    }
+
+    /**
+     * Fetch all transactions in a category/month that are NOT yet linked to a budget breakdown tag.
+     */
+    /**
+     * Fetch all transactions in a category/month that are NOT yet fully linked to budget breakdown tags.
+     * Calculates 'unallocatedBalance' for each transaction by subtracting existing splits.
+     */
+    public async getUnclaimedTransactions(categoryId: string, monthStr: string, budgetLineId: string): Promise<any[]> {
+        const query = `
+            WITH AllocatedTotals AS (
+                SELECT expenseId, SUM(amount) as totalAllocated
+                FROM expense_allocations
+                GROUP BY expenseId
+            )
+            SELECT 
+                e.*, 
+                c.name as categoryName,
+                (e.amount - COALESCE(at.totalAllocated, 0)) as unallocatedBalance
+            FROM expenses e
+            JOIN categories c ON e.categoryId = c.id
+            LEFT JOIN AllocatedTotals at ON e.id = at.expenseId
+            WHERE e.categoryId = ? 
+            AND datetime(e.date, 'localtime') LIKE ?
+            AND e.type = 'expense'
+            AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+            AND (
+                -- 1. Not tagged at all
+                (e.tagId IS NULL AND at.expenseId IS NULL)
+                OR 
+                -- 2. Partially tagged/allocated (has balance left)
+                (e.amount - COALESCE(at.totalAllocated, 0)) > 0.01
+            )
+            ORDER BY e.date DESC
+        `;
+        const result = await this.db.execute(query, [categoryId, `${monthStr}%`]);
+        return Database.getRows(result);
+    }
+
+    /**
+     * Assign a tag to an expense, effectively "claiming" it for a breakdown item.
+     */
+    /**
+     * Assign a tag to an expense, effectively "claiming" it for a breakdown item.
+     */
+    public async claimTransaction(expenseId: string, tagId: string): Promise<void> {
+        await this.db.execute(
+            'UPDATE expenses SET tagId = ?, isVerified = 1 WHERE id = ?',
+            [tagId, expenseId]
+        );
+    }
+
+    /**
+     * Create a split allocation for a transaction.
+     */
+    public async allocateTransaction(expenseId: string, categoryId: string, tagId: string, amount: number): Promise<void> {
+        await this.db.execute(
+            'INSERT INTO expense_allocations (id, expenseId, categoryId, tagId, amount) VALUES (?, ?, ?, ?, ?)',
+            [uuidv4(), expenseId, categoryId, tagId, amount]
+        );
+        // Mark parent as verified since we are actively splitting it
+        await this.db.execute(
+            'UPDATE expenses SET isVerified = 1 WHERE id = ?',
+            [expenseId]
+        );
+    }
+
+    /**
+     * Remove a link between a transaction and a tag.
+     * This handles both direct tagId on expenses and expense_allocations.
+     */
+    public async removeTransactionLink(expenseId: string, tagId: string): Promise<void> {
+        // 1. Check if it's a direct tag link
+        const directResult = await this.db.execute(
+            'SELECT id FROM expenses WHERE id = ? AND tagId = ?',
+            [expenseId, tagId]
+        );
+        if (Database.getRows(directResult).length > 0) {
+            await this.db.execute(
+                'UPDATE expenses SET tagId = NULL WHERE id = ?',
+                [expenseId]
+            );
+        }
+
+        // 2. Check and delete allocations
+        await this.db.execute(
+            'DELETE FROM expense_allocations WHERE expenseId = ? AND tagId = ?',
+            [expenseId, tagId]
+        );
+    }
+
+    /**
+     * Fetch ALL transactions in a category/month for reconciliation.
+     * Includes metadata and unallocatedBalance.
+     */
+    public async getTransactionsForReconciliation(categoryId: string, monthStr: string): Promise<any[]> {
+        const query = `
+            WITH AllocatedTotals AS (
+                SELECT expenseId, SUM(amount) as totalAllocated
+                FROM expense_allocations
+                GROUP BY expenseId
+            )
+            SELECT 
+                e.*, 
+                c.name as categoryName,
+                CASE 
+                    WHEN e.tagId IS NOT NULL THEN 0 
+                    ELSE (e.amount - COALESCE(at.totalAllocated, 0)) 
+                END as unallocatedBalance,
+                -- Return list of current tags for this expense
+                (SELECT GROUP_CONCAT(tagId) FROM expense_tags WHERE expenseId = e.id) as legacyTags,
+                
+                (SELECT GROUP_CONCAT(ct.name) 
+                 FROM expense_tags et 
+                 JOIN category_tags ct ON et.tagId = ct.id 
+                 WHERE et.expenseId = e.id) as legacyTagNames,
+                 
+                (SELECT ct.name 
+                 FROM category_tags ct 
+                 WHERE ct.id = e.tagId) as directTagName,
+                 
+                e.tagId as directTagId,
+                
+                (SELECT GROUP_CONCAT(ct.name) 
+                 FROM expense_allocations ea 
+                 JOIN category_tags ct ON ea.tagId = ct.id 
+                 WHERE ea.expenseId = e.id) as allocationTagNames,
+                 
+                (SELECT GROUP_CONCAT(tagId) FROM expense_allocations WHERE expenseId = e.id) as allocationTags
+            FROM expenses e
+            JOIN categories c ON e.categoryId = c.id
+            LEFT JOIN AllocatedTotals at ON e.id = at.expenseId
+            WHERE e.categoryId = ? 
+            AND datetime(e.date, 'localtime') LIKE ?
+            AND e.type = 'expense'
+            AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+            ORDER BY e.date DESC
+        `;
+        const result = await this.db.execute(query, [categoryId, `${monthStr}%`]);
         return Database.getRows(result);
     }
 }

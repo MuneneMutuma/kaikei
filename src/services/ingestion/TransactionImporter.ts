@@ -117,7 +117,7 @@ export class TransactionImporter {
                 other = allCats[0];
                 console.log(`[TransactionImporter] 'Other' not found, falling back to '${other.name}'`);
             } else {
-                other = await this.repo.addCategory('Other', false);
+                other = await this.repo.addCategory('Other', [], undefined, false);
                 console.warn('[TransactionImporter] No categories found, created "Other"');
             }
         }
@@ -243,7 +243,7 @@ export class TransactionImporter {
                 type,
                 sender,
                 recipient,
-                recipient,
+                isBusiness: false,
             });
 
             // 6.5 Handle Reversals
@@ -273,7 +273,7 @@ export class TransactionImporter {
                     recipient,
                     categoryName,
                     type,
-                    source,
+                    source: source as any,
                 };
                 IngestionEvents.emit(INGESTION_EVENT.TRANSACTION_INGESTED, eventData);
             }

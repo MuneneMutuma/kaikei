@@ -97,7 +97,7 @@ export class ModelManager {
         if (!exists) return false;
 
         const stat = await RNFS.stat(path);
-        const currentSize = parseInt(stat.size);
+        const currentSize = parseInt(String(stat.size), 10);
 
         // 1. Try to check against dynamic metadata
         try {
@@ -157,7 +157,7 @@ export class ModelManager {
                 }
 
                 const s = await RNFS.stat(modelPath);
-                const currentSize = parseInt(s.size);
+                const currentSize = parseInt(String(s.size), 10);
 
                 // Check completion first
                 if (await checkCompletion(currentSize)) {
@@ -206,13 +206,13 @@ export class ModelManager {
         if (await RNFS.exists(jobIdPath) && await RNFS.exists(modelPath)) {
             console.log("ModelManager: Found existing job, checking for liveness...");
             const s1 = await RNFS.stat(modelPath);
-            const size1 = parseInt(s1.size);
+            const size1 = parseInt(String(s1.size), 10);
 
             // Wait 2 seconds to see if it grows
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(() => r(null), 2000));
 
             const s2 = await RNFS.stat(modelPath);
-            const size2 = parseInt(s2.size);
+            const size2 = parseInt(String(s2.size), 10);
 
             if (size2 > size1) {
                 console.log("ModelManager: Existing download is ACTIVE. Resuming monitoring.");
@@ -314,7 +314,7 @@ export class ModelManager {
 
         // Monitoring Loop
         const stat = await RNFS.stat(modelPath);
-        const lastSize = parseInt(stat.size);
+        const lastSize = parseInt(String(stat.size), 10);
 
         ModelManager.startMonitoring(modelPath, jobIdPath, lastSize);
     }

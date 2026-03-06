@@ -1,5 +1,5 @@
 import { Database } from './Database';
-import { Expense, Category, PERSONA_DEFAULTS } from './Schema';
+import { Expense, Category, PERSONA_DEFAULTS, ExpenseAllocation } from './Schema';
 import { v4 as uuidv4 } from 'uuid';
 import { parseMpesaMessage } from '../../utils/mpesaParser';
 
@@ -7,45 +7,77 @@ export class ExpenseRepository {
     private db = Database.getInstance();
 
     /**
-     * Add a new expense
+    /**
+     * Add a new expense (with optional allocations)
      */
-    public async addExpense(expense: Omit<Expense, 'id' | 'synced'> | Omit<Expense, 'id' | 'synced' | 'isVerified'>): Promise<Expense> {
+    public async addExpense(
+        expense: Omit<Expense, 'id' | 'synced' | 'allocations'> | Omit<Expense, 'id' | 'synced' | 'isVerified' | 'allocations'>,
+        allocations?: { categoryId: string, tagId?: string, amount: number, note?: string }[]
+    ): Promise<Expense> {
         const id = uuidv4();
         const isVerified = 'isVerified' in expense ? expense.isVerified : false;
         // Default to false (Personal) if not provided
         const isBusiness = expense.isBusiness || false;
 
-        // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
-        const result = await this.db.execute(
-            `INSERT OR IGNORE INTO expenses (
-                id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness, parentId, budgetBreakdownId, tagId
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                id,
-                expense.amount,
-                expense.date,
-                expense.description,
-                expense.categoryId,
-                expense.source,
-                expense.rawText || null,
-                expense.transactionId || null,
-                expense.excludeFromAnalytics ? 1 : 0,
-                expense.type || 'expense',
-                expense.sender || null,
-                expense.recipient || null,
-                isVerified ? 1 : 0,
-                0,
-                isBusiness ? 1 : 0,
-                expense.parentId || null,
-                expense.budgetBreakdownId || null,
-                expense.tagId || null
-            ]
-        );
+        await this.db.execute('BEGIN TRANSACTION');
+        try {
+            // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
+            const result = await this.db.execute(
+                `INSERT OR IGNORE INTO expenses (
+                    id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness, parentId, budgetBreakdownId, tagId
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    id,
+                    expense.amount,
+                    expense.date,
+                    expense.description,
+                    expense.categoryId,
+                    expense.source,
+                    expense.rawText || null,
+                    expense.transactionId || null,
+                    expense.excludeFromAnalytics ? 1 : 0,
+                    expense.type || 'expense',
+                    expense.sender || null,
+                    expense.recipient || null,
+                    isVerified ? 1 : 0,
+                    0,
+                    isBusiness ? 1 : 0,
+                    expense.parentId || null,
+                    expense.budgetBreakdownId || null,
+                    expense.tagId || null
+                ]
+            );
 
-        if (result.rowsAffected && result.rowsAffected > 0) {
-            console.log(`[ExpenseRepository] Inserted tx: ${expense.transactionId}`);
-        } else {
-            console.warn(`[ExpenseRepository] Insert IGNORED for tx: ${expense.transactionId} (Duplicate or Invalid Category ${expense.categoryId})`);
+            if (result.rowsAffected && result.rowsAffected > 0) {
+                console.log(`[ExpenseRepository] Inserted tx: ${expense.transactionId || id}`);
+
+                // Insert contextual multi-tags if provided
+                if (expense.tags && expense.tags.length > 0) {
+                    for (const tagId of expense.tags) {
+                        await this.db.execute(
+                            'INSERT INTO expense_tags (id, expenseId, tagId) VALUES (?, ?, ?)',
+                            [uuidv4(), id, tagId]
+                        );
+                    }
+                }
+
+                // Insert allocations if provided and expense was actually inserted
+                if (allocations && allocations.length > 0) {
+                    for (const alloc of allocations) {
+                        await this.db.execute(
+                            'INSERT INTO expense_allocations (id, expenseId, categoryId, tagId, amount, note) VALUES (?, ?, ?, ?, ?, ?)',
+                            [uuidv4(), id, alloc.categoryId, alloc.tagId || null, alloc.amount, alloc.note || null]
+                        );
+                    }
+                }
+            } else {
+                console.warn(`[ExpenseRepository] Insert IGNORED for tx: ${expense.transactionId} (Duplicate or Invalid Category ${expense.categoryId})`);
+            }
+
+            await this.db.execute('COMMIT');
+        } catch (e) {
+            await this.db.execute('ROLLBACK');
+            throw e;
         }
 
         const newExpense: Expense = {
@@ -66,52 +98,75 @@ export class ExpenseRepository {
             isBusiness,
             parentId: expense.parentId || undefined,
             budgetBreakdownId: expense.budgetBreakdownId || undefined,
-            tagId: expense.tagId || undefined
+            tagId: expense.tagId || undefined,
+            tags: expense.tags || []
         };
 
         return newExpense;
     }
 
+
     /**
-     * Add multiple split expenses atomically
+     * Splits an existing transaction into multiple sub-allocations.
      */
-    public async addSplitExpenses(splits: (Omit<Expense, 'id' | 'synced'> | Omit<Expense, 'id' | 'synced' | 'isVerified'>)[]): Promise<Expense[]> {
-        const results: Expense[] = [];
-        // @ts-ignore
+    public async splitTransaction(parentId: string, allocations: { categoryId: string, tagId?: string, amount: number, note?: string }[]): Promise<void> {
         const db = this.db;
-        db.execute('BEGIN TRANSACTION');
+
+        // Fetch parent to make sure it exists
+        const parentRes = await db.execute('SELECT * FROM expenses WHERE id = ? OR transactionId = ?', [parentId, parentId]);
+        const parent = Database.getRows(parentRes)[0] as Expense | undefined;
+
+        if (!parent) {
+            throw new Error(`Parent transaction ${parentId} not found`);
+        }
+
+        await db.execute('BEGIN TRANSACTION');
         try {
-            for (const split of splits) {
-                const added = await this.addExpense(split);
-                results.push(added);
+            // Delete existing allocations for this parent (to resync them)
+            await db.execute('DELETE FROM expense_allocations WHERE expenseId = ?', [parent.id]);
+
+            // Add new allocations
+            for (const alloc of allocations) {
+                await db.execute(
+                    'INSERT INTO expense_allocations (id, expenseId, categoryId, tagId, amount, note) VALUES (?, ?, ?, ?, ?, ?)',
+                    [uuidv4(), parent.id, alloc.categoryId, alloc.tagId || null, alloc.amount, alloc.note || null]
+                );
             }
-            db.execute('COMMIT');
+
+            // Ensure parent is marked verified since it's actively categorized now
+            await db.execute(
+                'UPDATE expenses SET isVerified = 1 WHERE id = ?',
+                [parent.id]
+            );
+
+            await db.execute('COMMIT');
         } catch (e) {
-            db.execute('ROLLBACK');
+            await db.execute('ROLLBACK');
             throw e;
         }
-        return results;
     }
 
     /**
-     * Get all splits for a parent transaction
+     * Deletes all split allocations for a parent transaction.
      */
-    public async getSplitsForParent(parentId: string): Promise<Expense[]> {
-        const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
-             FROM expenses e 
-             LEFT JOIN categories c ON e.categoryId = c.id
-             WHERE e.parentId = ? OR e.id = ?
-             ORDER BY e.date DESC`,
-            [parentId, parentId]
-        );
+    public async deleteSplitsForParent(parentId: string): Promise<void> {
+        await this.db.execute('DELETE FROM expense_allocations WHERE expenseId = ?', [parentId]);
+    }
 
-        return Database.getRows(result).map(row => ({
-            ...row,
-            excludeFromAnalytics: !!row.excludeFromAnalytics,
-            isBusiness: !!row.isBusiness,
-            isVerified: !!row.isVerified
-        })) as Expense[];
+    /**
+     * Get all allocations for a parent transaction
+     */
+    public async getSplitsForParent(parentId: string): Promise<ExpenseAllocation[]> {
+        // Fetch allocations and join with categories for UI display if needed
+        const result = await this.db.execute(
+            `SELECT ea.*, c.name as categoryName, ct.name as tagName
+             FROM expense_allocations ea 
+             LEFT JOIN categories c ON ea.categoryId = c.id
+             LEFT JOIN category_tags ct ON ea.tagId = ct.id
+             WHERE ea.expenseId = ?`,
+            [parentId]
+        );
+        return Database.getRows(result) as (ExpenseAllocation & { categoryName?: string, tagName?: string })[];
     }
 
     /**
@@ -120,7 +175,8 @@ export class ExpenseRepository {
      */
     public async getRecentExpenses(limit: number = 5): Promise<Expense[]> {
         const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -133,7 +189,8 @@ export class ExpenseRepository {
             ...row,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
     }
 
@@ -142,7 +199,8 @@ export class ExpenseRepository {
      */
     public async getAllExpenses(): Promise<Expense[]> {
         const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -153,7 +211,8 @@ export class ExpenseRepository {
             ...row,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
     }
 
@@ -174,7 +233,8 @@ export class ExpenseRepository {
         }
 
         const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE datetime(e.date, 'localtime') LIKE ? 
@@ -187,7 +247,8 @@ export class ExpenseRepository {
             ...row,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
     }
 
@@ -299,7 +360,7 @@ export class ExpenseRepository {
 
     // --- Updates ---
 
-    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness' | 'budgetBreakdownId' | 'tagId'>>): Promise<void> {
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness' | 'budgetBreakdownId' | 'tagId' | 'tags'>>): Promise<void> {
         const sets: string[] = [];
         const args: any[] = [];
 
@@ -336,6 +397,16 @@ export class ExpenseRepository {
             args.push(updates.tagId);
         }
 
+        if (updates.tags !== undefined) {
+            await this.db.execute('DELETE FROM expense_tags WHERE expenseId = ?', [id]);
+            for (const tId of updates.tags) {
+                await this.db.execute(
+                    'INSERT INTO expense_tags (id, expenseId, tagId) VALUES (?, ?, ?)',
+                    [uuidv4(), id, tId]
+                );
+            }
+        }
+
         if (sets.length === 0) return;
 
         args.push(id);
@@ -350,7 +421,8 @@ export class ExpenseRepository {
         if (!recipient) return null;
 
         const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
              FROM expenses e
              JOIN categories c ON e.categoryId = c.id
              WHERE (e.recipient = ? COLLATE NOCASE OR e.sender = ? COLLATE NOCASE OR e.description LIKE ?)
@@ -368,7 +440,8 @@ export class ExpenseRepository {
                 ...row,
                 isVerified: !!row.isVerified,
                 excludeFromAnalytics: !!row.excludeFromAnalytics,
-                isBusiness: !!row.isBusiness
+                isBusiness: !!row.isBusiness,
+                tags: row.tagsArr ? row.tagsArr.split(',') : []
             } as Expense;
         }
         return null;
@@ -403,7 +476,8 @@ export class ExpenseRepository {
      */
     public async getUncategorizedExpensesByRecipient(recipient: string): Promise<Expense[]> {
         const result = await this.db.executeAsync(
-            `SELECT e.*
+            `SELECT e.*,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
              FROM expenses e
              WHERE e.recipient = ? COLLATE NOCASE
              AND (
@@ -422,7 +496,8 @@ export class ExpenseRepository {
             ...row,
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
     }
 
@@ -441,7 +516,8 @@ export class ExpenseRepository {
 
     public getExpensesInDateRange(startDate: string, endDate: string): Expense[] {
         const result = this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE datetime(e.date, 'localtime') >= ? AND datetime(e.date, 'localtime') <= ? AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -452,14 +528,37 @@ export class ExpenseRepository {
             ...row,
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
+    }
+
+    private get effectiveExpensesCTE() {
+        return `
+            WITH AllocatedTotals AS (
+                SELECT expenseId, SUM(amount) as totalAllocated
+                FROM expense_allocations
+                GROUP BY expenseId
+            ),
+            EffectiveExpenses AS (
+                SELECT e.id, e.categoryId, e.type, e.excludeFromAnalytics, e.date, 
+                       (e.amount - COALESCE(at.totalAllocated, 0)) as effectiveAmount
+                FROM expenses e
+                LEFT JOIN AllocatedTotals at ON e.id = at.expenseId
+                WHERE (e.amount - COALESCE(at.totalAllocated, 0)) > 0
+                UNION ALL
+                SELECT ea.id, ea.categoryId, e.type, e.excludeFromAnalytics, e.date, ea.amount as effectiveAmount
+                FROM expense_allocations ea
+                JOIN expenses e ON ea.expenseId = e.id
+            )
+        `;
     }
 
     public async getCategoryTotals(startDate: string, endDate: string): Promise<{ name: string; total: number }[]> {
         const result = await this.db.execute(
-            `SELECT c.name, SUM(e.amount) as total
-            FROM expenses e
+            `${this.effectiveExpensesCTE}
+            SELECT c.name, SUM(e.effectiveAmount) as total
+            FROM EffectiveExpenses e
             JOIN categories c ON e.categoryId = c.id
             WHERE datetime(e.date, 'localtime') >= ? AND datetime(e.date, 'localtime') <= ? 
             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -474,8 +573,9 @@ export class ExpenseRepository {
     public async getDailyTotals(startDate: string, endDate: string): Promise<{ day: string; total: number }[]> {
         // SQLite: SUBSTR(date, 1, 10) extracts 'YYYY-MM-DD'
         const result = await this.db.execute(
-            `SELECT SUBSTR(datetime(date, 'localtime'), 1, 10) as day, SUM(amount) as total
-            FROM expenses
+            `${this.effectiveExpensesCTE}
+            SELECT SUBSTR(datetime(date, 'localtime'), 1, 10) as day, SUM(effectiveAmount) as total
+            FROM EffectiveExpenses
             WHERE SUBSTR(datetime(date, 'localtime'), 1, 10) >= ? 
             AND SUBSTR(datetime(date, 'localtime'), 1, 10) <= ?
             AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
@@ -501,7 +601,8 @@ export class ExpenseRepository {
         // Broadened: Fetch ANY unverified expense (NULL category, Orphans, 'Other', manual unchecked)
         // Added c.id IS NULL to catch orphans (categoryId exists but no matching category)
         const result = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
+            `SELECT e.*, c.name as categoryName,
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
              FROM expenses e
              LEFT JOIN categories c ON e.categoryId = c.id
              WHERE e.isVerified = 0
@@ -517,7 +618,8 @@ export class ExpenseRepository {
             ...row,
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
-            isBusiness: !!row.isBusiness
+            isBusiness: !!row.isBusiness,
+            tags: row.tagsArr ? row.tagsArr.split(',') : []
         })) as Expense[];
     }
 
@@ -680,13 +782,14 @@ export class ExpenseRepository {
         const monthStr = `${year}-${month.toString().padStart(2, '0')}`;
 
         // 1. Get Monthly Totals
-        // Note: We use the existing async logic pattern
+        // Note: Income might not have allocations, but it's safe to use the CTE
         const expensesResult = await this.db.execute(
-            `SELECT type, SUM(amount) as total 
-             FROM expenses 
-             WHERE datetime(date, 'localtime') LIKE ? 
-             AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
-             GROUP BY type`,
+            `${this.effectiveExpensesCTE}
+            SELECT type, SUM(effectiveAmount) as total 
+            FROM EffectiveExpenses 
+            WHERE datetime(date, 'localtime') LIKE ? 
+            AND (excludeFromAnalytics = 0 OR excludeFromAnalytics IS NULL)
+            GROUP BY type`,
             [`${monthStr}%`]
         );
         const rows = Database.getRows(expensesResult);
@@ -701,8 +804,9 @@ export class ExpenseRepository {
 
         // 2. Get Top Categories
         const catResult = await this.db.execute(
-            `SELECT c.name, SUM(e.amount) as total
-             FROM expenses e
+            `${this.effectiveExpensesCTE}
+            SELECT c.name, SUM(e.effectiveAmount) as total
+             FROM EffectiveExpenses e
              JOIN categories c ON e.categoryId = c.id
              WHERE datetime(e.date, 'localtime') LIKE ? 
              AND e.type = 'expense'
@@ -731,11 +835,12 @@ export class ExpenseRepository {
      */
     public async getDailyBreakdownInRange(startDate: string, endDate: string): Promise<Record<string, { name: string; amount: number; color: string }[]>> {
         const result = await this.db.execute(
-            `SELECT 
+            `${this.effectiveExpensesCTE}
+            SELECT 
                 SUBSTR(datetime(e.date, 'localtime'), 1, 10) as day,
                 COALESCE(c.name, 'Uncategorized') as name, 
-                SUM(e.amount) as total
-             FROM expenses e
+                SUM(e.effectiveAmount) as total
+             FROM EffectiveExpenses e
              LEFT JOIN categories c ON e.categoryId = c.id
              WHERE SUBSTR(datetime(e.date, 'localtime'), 1, 10) >= ? 
              AND SUBSTR(datetime(e.date, 'localtime'), 1, 10) <= ?
@@ -830,13 +935,15 @@ export class ExpenseRepository {
 
         // 4. NEW: Top Transactions (Largest 5 this month)
         const topTxResult = await this.db.execute(
-            `SELECT e.*, c.name as categoryName 
-             FROM expenses e
+            `${this.effectiveExpensesCTE}
+             SELECT e.id, e.description, e.source, e.effectiveAmount as amount, e.date, 
+                    e.isVerified, e.isBusiness, c.name as categoryName 
+             FROM EffectiveExpenses e
              LEFT JOIN categories c ON e.categoryId = c.id
              WHERE datetime(e.date, 'localtime') LIKE ? 
              AND e.type = 'expense'
              AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
-             ORDER BY e.amount DESC
+             ORDER BY e.effectiveAmount DESC
              LIMIT 5`,
             [`${currentYear}-${currentMonth.toString().padStart(2, '0')}%`]
         );
