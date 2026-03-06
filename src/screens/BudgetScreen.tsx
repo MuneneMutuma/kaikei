@@ -248,11 +248,11 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
                 <ScrollView contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
                     {activeTab === 'planned' ? (
                         <>
-                            {plannedBudgets.length > 0 ? plannedBudgets.map(item => (
+                            {plannedBudgets.length > 0 ? plannedBudgets.map(b => (
                                 <BudgetCategoryCard
-                                    key={item.id}
-                                    budget={item}
-                                    onPress={() => handleEditBudget(item)}
+                                    key={b.id}
+                                    budget={b}
+                                    onPress={() => navigation.navigate('BudgetDetail', { categoryId: b.categoryId, month: currentMonth, spentAmount: b.spentAmount || 0, itemizedAmount: b.itemizedAmount || 0, limitAmount: b.limitAmount, categoryName: b.categoryName || 'Unknown' })}
                                 />
                             )) : renderEmpty()}
                         </>
@@ -262,7 +262,7 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
                                 <BudgetCategoryCard
                                     key={item.categoryId}
                                     budget={item}
-                                    onPress={() => handleEditBudget(item)}
+                                    onPress={() => navigation.navigate('BudgetDetail', { categoryId: item.categoryId, month: currentMonth, spentAmount: item.spentAmount || 0, itemizedAmount: item.itemizedAmount || 0, limitAmount: item.limitAmount, categoryName: item.categoryName || 'Unknown' })}
                                 />
                             )) : (
                                 <View style={styles.centeredEmpty}>
