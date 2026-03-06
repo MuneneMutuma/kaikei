@@ -26,7 +26,7 @@ const ModelDownloadScreen = () => {
             }
         });
 
-        return () => unsubscribe();
+        return () => { unsubscribe(); };
     }, []);
 
     const checkStatus = async () => {

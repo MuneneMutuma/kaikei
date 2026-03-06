@@ -4,7 +4,7 @@ import { Expense } from '../services/ledger/Schema';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { Mic, AlertCircle, Briefcase, User } from 'lucide-react-native';
-import { getCategoryIcon, getCategoryColor } from '../screens/AnalyticsScreen';
+import { getCategoryIcon, getCategoryColor } from '../utils/categoryHelpers';
 
 interface TransactionRowProps {
     item: Expense;

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, Alert } from 'react-native';
-import { pick, isCancel, types } from '@react-native-documents/picker';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { FlatList } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
+import { pick, types } from '@react-native-documents/picker';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { BackupService, BackupFile } from '../services/backup/BackupService';
@@ -14,6 +16,7 @@ interface RestorePickerModalProps {
 export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible, onClose, onSelect }) => {
     const [backups, setBackups] = useState<BackupFile[]>([]);
     const [loading, setLoading] = useState(true);
+    const sheetRef = React.useRef<SwipeableSheetRef>(null);
 
     const pickDocument = async () => {
         try {
@@ -31,23 +34,26 @@ export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible,
                     mtime: new Date(),
                 });
             }
-        } catch (err) {
-            if (isCancel(err)) {
+        } catch (err: any) {
+            if (err?.code === 'DOCUMENT_PICKER_CANCELED' || String(err).includes('cancel')) {
                 // User cancelled the picker
             } else {
-                Alert.alert('Error', 'Failed to pick document: ' + (err as any).message);
+                Alert.alert('Error', 'Failed to pick document: ' + err.message);
             }
         }
     };
 
     useEffect(() => {
         if (visible) {
+            sheetRef.current?.present();
             setLoading(true);
             const service = new BackupService();
             service.listBackups().then(files => {
                 setBackups(files);
                 setLoading(false);
             });
+        } else {
+            sheetRef.current?.dismiss();
         }
     }, [visible]);
 
@@ -65,62 +71,56 @@ export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible,
     };
 
     return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="slide"
-            onRequestClose={onClose}
+        <SwipeableSheet
+            ref={sheetRef}
+            title="Select Backup"
+            snapPoints={['50%', '80%']}
+            onDismiss={onClose}
         >
-            <View style={styles.overlay}>
-                <View style={styles.card}>
-                    <View style={styles.header}>
-                        <Text style={styles.headerTitle}>Select Backup</Text>
-                    </View>
+            <View style={{ flex: 1 }}>
+                <View style={styles.content}>
+                    {loading ? (
+                        <ActivityIndicator size="large" color={colors.primary} style={{ padding: 40 }} />
+                    ) : backups.length === 0 ? (
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyText}>No backups found</Text>
+                            <Text style={styles.emptyHint}>
+                                We couldn't find any backups in common folders.{"\n"}
+                                Tap "Browse File..." below to select manually.
+                            </Text>
+                        </View>
+                    ) : (
+                        <FlatList
+                            data={backups}
+                            keyExtractor={(item) => item.path}
+                            style={{ maxHeight: 400 }}
+                            renderItem={({ item }: { item: BackupFile }) => (
+                                <TouchableOpacity style={styles.fileRow} onPress={() => onSelect(item)}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
+                                        <Text style={styles.fileMeta}>
+                                            {formatDate(item.mtime)} · {formatSize(item.size)}
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.selectText}>Select</Text>
+                                </TouchableOpacity>
+                            )}
+                            ItemSeparatorComponent={() => <View style={styles.separator} />}
+                        />
+                    )}
+                </View>
 
-                    <View style={styles.content}>
-                        {loading ? (
-                            <ActivityIndicator size="large" color={colors.primary} style={{ padding: 40 }} />
-                        ) : backups.length === 0 ? (
-                            <View style={styles.emptyContainer}>
-                                <Text style={styles.emptyText}>No backups found</Text>
-                                <Text style={styles.emptyHint}>
-                                    We couldn't find any backups in common folders.{"\n"}
-                                    Tap "Browse File..." below to select manually.
-                                </Text>
-                            </View>
-                        ) : (
-                            <FlatList
-                                data={backups}
-                                keyExtractor={(item) => item.path}
-                                style={{ maxHeight: 300 }}
-                                renderItem={({ item }) => (
-                                    <TouchableOpacity style={styles.fileRow} onPress={() => onSelect(item)}>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
-                                            <Text style={styles.fileMeta}>
-                                                {formatDate(item.mtime)} · {formatSize(item.size)}
-                                            </Text>
-                                        </View>
-                                        <Text style={styles.selectText}>Select</Text>
-                                    </TouchableOpacity>
-                                )}
-                                ItemSeparatorComponent={() => <View style={styles.separator} />}
-                            />
-                        )}
-                    </View>
-
-                    <View style={styles.footer}>
-                        <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-                            <Text style={styles.cancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <View style={{ width: 12 }} />
-                        <TouchableOpacity style={styles.browseButton} onPress={pickDocument}>
-                            <Text style={styles.browseButtonText}>Browse File...</Text>
-                        </TouchableOpacity>
-                    </View>
+                <View style={styles.footer}>
+                    <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+                        <Text style={styles.cancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 12 }} />
+                    <TouchableOpacity style={styles.browseButton} onPress={pickDocument}>
+                        <Text style={styles.browseButtonText}>Browse File...</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
-        </Modal>
+        </SwipeableSheet>
     );
 };
 

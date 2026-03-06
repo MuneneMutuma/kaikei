@@ -1,6 +1,7 @@
 
 import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { X, BrainCircuit, MessageSquare, CheckCircle, Archive, Cpu, Trash2, ArrowRight } from 'lucide-react-native';
@@ -22,6 +23,16 @@ const getSourceBadge = (source?: string) => {
 };
 
 export const InsightDetailModal: React.FC<InsightDetailModalProps> = ({ visible, insight, onClose, onArchive, onDelete, onPillPress }) => {
+    const sheetRef = React.useRef<SwipeableSheetRef>(null);
+
+    React.useEffect(() => {
+        if (visible && insight) {
+            sheetRef.current?.present();
+        } else {
+            sheetRef.current?.dismiss();
+        }
+    }, [visible, insight]);
+
     if (!insight) return null;
 
     const sourceConfig = getSourceBadge(insight.source || (insight.isLlmGenerated ? 'local_llm' : 'rule'));
@@ -62,15 +73,14 @@ export const InsightDetailModal: React.FC<InsightDetailModalProps> = ({ visible,
     };
 
     return (
-        <Modal
-            animationType="slide"
-            transparent={true}
-            visible={visible}
-            onRequestClose={onClose}
+        <SwipeableSheet
+            ref={sheetRef}
+            title={insight.title}
+            snapPoints={['70%', '90%']}
+            onDismiss={onClose}
         >
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    {/* Header */}
+            <View style={{ flex: 1 }}>
+                <ScrollView contentContainerStyle={styles.scrollBody}>
                     <View style={styles.header}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                             <View style={[styles.sourceBadge, { backgroundColor: sourceConfig.color }]}>
@@ -79,69 +89,63 @@ export const InsightDetailModal: React.FC<InsightDetailModalProps> = ({ visible,
                             </View>
                             <Text style={styles.typeLabel}>{insight.type.toUpperCase()}</Text>
                         </View>
-                        <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                            <X size={24} color={colors.textSecondary} />
-                        </TouchableOpacity>
                     </View>
 
-                    <ScrollView contentContainerStyle={styles.scrollBody}>
-                        <Text style={styles.title}>{insight.title}</Text>
-                        {insight.metric && <Text style={styles.metric}>{insight.metric}</Text>}
+                    {insight.metric && <Text style={styles.metric}>{insight.metric}</Text>}
 
-                        <View style={styles.divider} />
+                    <View style={styles.divider} />
 
-                        <Text style={styles.description}>{insight.description}</Text>
+                    <Text style={styles.description}>{insight.description}</Text>
 
-                        {/* Evidence Section */}
-                        {insight.citations && insight.citations.length > 0 && (
-                            <View style={styles.evidenceSection}>
-                                <Text style={styles.sectionTitle}>Evidence & Context</Text>
-                                {insight.citations.map((c, i) => (
-                                    <TouchableOpacity
-                                        key={i}
-                                        style={styles.evidenceItem}
-                                        onPress={() => {
-                                            onClose();
-                                            if (onPillPress) onPillPress(c);
-                                        }}
-                                    >
-                                        <CheckCircle size={16} color={colors.primary} />
-                                        <Text style={styles.evidenceText}>{c.label}</Text>
-                                        <ArrowRight size={12} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        )}
-
-                        {/* Interactive Future Hint */}
-                        <View style={styles.hintBox}>
-                            <MessageSquare size={16} color={colors.info} />
-                            <Text style={styles.hintText}>
-                                This insight was generated based on your last 30 days of activity.
-                                Mark as helpful to train the assistant.
-                            </Text>
+                    {/* Evidence Section */}
+                    {insight.citations && insight.citations.length > 0 && (
+                        <View style={styles.evidenceSection}>
+                            <Text style={styles.sectionTitle}>Evidence & Context</Text>
+                            {insight.citations.map((c, i) => (
+                                <TouchableOpacity
+                                    key={i}
+                                    style={styles.evidenceItem}
+                                    onPress={() => {
+                                        onClose();
+                                        if (onPillPress) onPillPress(c);
+                                    }}
+                                >
+                                    <CheckCircle size={16} color={colors.primary} />
+                                    <Text style={styles.evidenceText}>{c.label}</Text>
+                                    <ArrowRight size={12} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                                </TouchableOpacity>
+                            ))}
                         </View>
-                    </ScrollView>
+                    )}
 
-                    {/* Footer Actions */}
-                    <View style={styles.footer}>
-                        {onDelete && (
-                            <TouchableOpacity style={[styles.btnSecondary, { borderColor: '#FECACA', backgroundColor: '#FEF2F2' }]} onPress={handleDelete}>
-                                <Trash2 size={20} color={colors.error} />
-                            </TouchableOpacity>
-                        )}
-
-                        <TouchableOpacity style={styles.btnSecondary} onPress={handleArchive}>
-                            <Archive size={20} color={colors.textSecondary} />
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.btnPrimary} onPress={onClose}>
-                            <Text style={styles.btnText}>Got it</Text>
-                        </TouchableOpacity>
+                    {/* Interactive Future Hint */}
+                    <View style={styles.hintBox}>
+                        <MessageSquare size={16} color={colors.info} />
+                        <Text style={styles.hintText}>
+                            This insight was generated based on your last 30 days of activity.
+                            Mark as helpful to train the assistant.
+                        </Text>
                     </View>
+                </ScrollView>
+
+                {/* Footer Actions */}
+                <View style={styles.footer}>
+                    {onDelete && (
+                        <TouchableOpacity style={[styles.btnSecondary, { borderColor: '#FECACA', backgroundColor: '#FEF2F2' }]} onPress={handleDelete}>
+                            <Trash2 size={20} color={colors.error} />
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity style={styles.btnSecondary} onPress={handleArchive}>
+                        <Archive size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.btnPrimary} onPress={onClose}>
+                        <Text style={styles.btnText}>Got it</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
-        </Modal>
+        </SwipeableSheet>
     );
 };
 
@@ -189,7 +193,8 @@ const styles = StyleSheet.create({
         color: 'white'
     },
     scrollBody: {
-        paddingBottom: 40
+        paddingBottom: 40,
+        paddingHorizontal: 20,
     },
     title: {
         fontSize: 24,

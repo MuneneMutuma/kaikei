@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
 import { CloudOff, Settings } from 'lucide-react-native';
 import { colors } from '../theme/colors';
 
@@ -10,60 +11,60 @@ interface OfflineVoiceGuideProps {
 }
 
 export const OfflineVoiceGuide = ({ visible, onClose, onOpenSettings }: OfflineVoiceGuideProps) => {
+    const sheetRef = React.useRef<SwipeableSheetRef>(null);
+
+    React.useEffect(() => {
+        if (visible) {
+            sheetRef.current?.present();
+        } else {
+            sheetRef.current?.dismiss();
+        }
+    }, [visible]);
+
     return (
-        <Modal
-            transparent
-            visible={visible}
-            animationType="fade"
-            onRequestClose={onClose}
+        <SwipeableSheet
+            ref={sheetRef}
+            title="Offline Voice Setup"
+            snapPoints={['50%', '80%']}
+            onDismiss={onClose}
         >
-            <View style={styles.overlay}>
-                <View style={styles.card}>
-                    <View style={styles.iconContainer}>
-                        <CloudOff size={32} color={colors.primary} />
-                    </View>
-
-                    <Text style={styles.title}>Offline Voice Setup</Text>
-
-                    <Text style={styles.description}>
-                        To use voice input without internet, you need to download the language pack.
-                    </Text>
-
-                    <View style={styles.stepsContainer}>
-                        <Text style={styles.step}>1. Tap "Open Settings" below</Text>
-                        <Text style={styles.step}>2. Allow "Offline Speech Recognition"</Text>
-                        <Text style={styles.step}>3. Download <Text style={{ fontWeight: 'bold' }}>English (US/UK)</Text> and <Text style={{ fontWeight: 'bold' }}>Swahili</Text></Text>
-                    </View>
-
-                    <View style={styles.buttons}>
-                        <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={onClose}>
-                            <Text style={styles.btnTextCancel}>Later</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={[styles.btn, styles.btnConfirm]} onPress={onOpenSettings}>
-                            <Settings size={18} color="white" style={{ marginRight: 8 }} />
-                            <Text style={styles.btnTextConfirm}>Open Settings</Text>
-                        </TouchableOpacity>
-                    </View>
+            <ScrollView contentContainerStyle={styles.card}>
+                <View style={styles.iconContainer}>
+                    <CloudOff size={32} color={colors.primary} />
                 </View>
-            </View>
-        </Modal>
+
+                <Text style={styles.title}>Offline Voice Setup</Text>
+
+                <Text style={styles.description}>
+                    To use voice input without internet, you need to download the language pack.
+                </Text>
+
+                <View style={styles.stepsContainer}>
+                    <Text style={styles.step}>1. Tap "Open Settings" below</Text>
+                    <Text style={styles.step}>2. Allow "Offline Speech Recognition"</Text>
+                    <Text style={styles.step}>3. Download <Text style={{ fontWeight: 'bold' }}>English (US/UK)</Text> and <Text style={{ fontWeight: 'bold' }}>Swahili</Text></Text>
+                </View>
+
+                <View style={styles.buttons}>
+                    <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={onClose}>
+                        <Text style={styles.btnTextCancel}>Later</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={[styles.btn, styles.btnConfirm]} onPress={onOpenSettings}>
+                        <Settings size={18} color="white" style={{ marginRight: 8 }} />
+                        <Text style={styles.btnTextConfirm}>Open Settings</Text>
+                    </TouchableOpacity>
+                </View>
+            </ScrollView>
+        </SwipeableSheet>
     );
 };
 
 const styles = StyleSheet.create({
-    overlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        justifyContent: 'center',
-        padding: 24,
-    },
     card: {
         backgroundColor: 'white',
-        borderRadius: 24,
         padding: 24,
         alignItems: 'center',
-        elevation: 10,
     },
     iconContainer: {
         backgroundColor: '#E8F5E9',

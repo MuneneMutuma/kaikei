@@ -1,9 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-    ActivityIndicator, Alert, PanResponder,
-    Animated, Pressable, Platform,
-    View, Text, Modal, TouchableOpacity, StyleSheet, FlatList
+    ActivityIndicator, Alert,
+    View, Text, TouchableOpacity, StyleSheet, Pressable
 } from 'react-native';
+import { FlatList } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Expense, Category } from '../services/ledger/Schema';
 import { colors } from '../theme/colors';
@@ -32,48 +33,25 @@ export const SmartSuggestionDetailModal = ({
     const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
     const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
     const [loading, setLoading] = useState(false);
+    const sheetRef = useRef<SwipeableSheetRef>(null);
+    const catSheetRef = useRef<SwipeableSheetRef>(null);
 
-    // 1. Ensure the Animated Value is fresh
-    const panY = useRef(new Animated.Value(0)).current;
-
-    // 2. Optimized PanResponder
-    const panResponder = useRef(
-        PanResponder.create({
-            onStartShouldSetPanResponder: () => false, // Don't steal the initial tap
-            onMoveShouldSetPanResponder: (_, gestureState) => {
-                // ONLY take over if user drags down more than 10px
-                return Math.abs(gestureState.dy) > 10 && gestureState.dy > 0;
-            },
-            onPanResponderMove: Animated.event([null, { dy: panY }], {
-                useNativeDriver: false, // Must be false for PanResponder move
-            }),
-            onPanResponderRelease: (_, gestureState) => {
-                if (gestureState.dy > 150) {
-                    Animated.timing(panY, {
-                        toValue: 800, // Drive it off screen
-                        duration: 300,
-                        useNativeDriver: true,
-                    }).start(() => {
-                        onClose(); // Call close AFTER animation
-                    });
-                } else {
-                    Animated.spring(panY, {
-                        toValue: 0,
-                        useNativeDriver: true,
-                        friction: 8,
-                    }).start();
-                }
-            },
-        })
-    ).current;
-
-    // 3. CRITICAL: Lifecycle sync
     React.useEffect(() => {
         if (visible) {
-            panY.setValue(0); // Reset position instantly
+            sheetRef.current?.present();
             setSelectedIds(new Set(transactions.map(t => t.id)));
+        } else {
+            sheetRef.current?.dismiss();
         }
     }, [visible, transactions]);
+
+    React.useEffect(() => {
+        if (isCategoryPickerVisible) {
+            catSheetRef.current?.present();
+        } else {
+            catSheetRef.current?.dismiss();
+        }
+    }, [isCategoryPickerVisible]);
 
     const toggleSelection = (id: string) => {
         const next = new Set(selectedIds);
@@ -133,35 +111,15 @@ export const SmartSuggestionDetailModal = ({
     const paddingBottom = Math.max(insets.bottom, 20);
 
     return (
-        <Modal
-            visible={visible}
-            animationType="slide"
-            transparent={true}
-            onRequestClose={onClose}
-        >
-            <View style={styles.overlay}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-
-                <Animated.View
-                    style={[
-                        styles.container,
-                        {
-                            transform: [{
-                                translateY: panY.interpolate({
-                                    inputRange: [0, 800],
-                                    outputRange: [0, 800],
-                                    extrapolate: 'clamp' // Prevents pulling the modal UP
-                                })
-                            }]
-                        }
-                    ]}
-                >
-                    {/* GESTURE ZONE - ONLY THE HEADER */}
-                    <View style={styles.header} {...panResponder.panHandlers}>
-                        <View style={styles.handle} />
-                        <Text style={styles.title}>Review: {recipientName}</Text>
-                        <Text style={styles.subtitle}>{transactions.length} transactions found</Text>
-                    </View>
+        <>
+            <SwipeableSheet
+                ref={sheetRef}
+                title={`Review: ${recipientName}`}
+                snapPoints={['85%', '95%']}
+                onDismiss={onClose}
+            >
+                <View style={{ flex: 1 }}>
+                    <Text style={styles.subtitle}>{transactions.length} transactions found</Text>
 
                     <FlatList
                         data={transactions}
@@ -169,14 +127,11 @@ export const SmartSuggestionDetailModal = ({
                         renderItem={renderItem}
                         contentContainerStyle={styles.list}
                         initialNumToRender={10}
-                        windowSize={5}
-                        maxToRenderPerBatch={10}
-                        removeClippedSubviews={true}
                         style={{ flex: 1 }}
                     />
 
-                    {/* INTERACTION ZONE - NOW WITH SAFE AREA */}
-                    <View style={[styles.footer, { paddingBottom }]}>
+                    {/* INTERACTION ZONE */}
+                    <View style={styles.footer}>
                         <TouchableOpacity
                             style={styles.pickerBtn}
                             onPress={() => setIsCategoryPickerVisible(true)}
@@ -209,37 +164,37 @@ export const SmartSuggestionDetailModal = ({
                             </TouchableOpacity>
                         </View>
                     </View>
-                </Animated.View>
-            </View>
-
-            {/* Category Picker Modal (Nested) */}
-            <Modal visible={isCategoryPickerVisible} transparent={true} animationType="fade">
-                <View style={styles.pickerOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setIsCategoryPickerVisible(false)} />
-                    <View style={styles.pickerContainer}>
-                        <Text style={styles.pickerTitle}>Select Category</Text>
-                        <FlatList
-                            data={categories}
-                            keyExtractor={c => c.id}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity style={styles.catItem} onPress={() => {
-                                    setSelectedCategoryId(item.id);
-                                    setIsCategoryPickerVisible(false);
-                                }}>
-                                    <View style={[styles.catIcon, { backgroundColor: colors.primary + '20' }]}>
-                                        <Text style={{ fontSize: 16 }}>🏷️</Text>
-                                    </View>
-                                    <Text style={styles.catText}>{item.name}</Text>
-                                </TouchableOpacity>
-                            )}
-                        />
-                        <TouchableOpacity style={styles.closePickerBtn} onPress={() => setIsCategoryPickerVisible(false)}>
-                            <Text style={{ color: colors.textSecondary }}>Cancel</Text>
-                        </TouchableOpacity>
-                    </View>
                 </View>
-            </Modal>
-        </Modal>
+            </SwipeableSheet>
+
+            {/* Category Picker Sheet */}
+            <SwipeableSheet
+                ref={catSheetRef}
+                title="Select Category"
+                snapPoints={['50%', '80%']}
+                onDismiss={() => setIsCategoryPickerVisible(false)}
+            >
+                <FlatList
+                    data={categories}
+                    keyExtractor={(item: Category) => item.id}
+                    renderItem={({ item }: { item: Category }) => (
+                        <Pressable
+                            style={styles.catItem}
+                            onPress={() => {
+                                setSelectedCategoryId(item.id);
+                                setIsCategoryPickerVisible(false);
+                            }}
+                        >
+                            <View style={[styles.catIcon, { backgroundColor: colors.primary + '20' }]}>
+                                <Text style={{ fontSize: 16 }}>🏷️</Text>
+                            </View>
+                            <Text style={styles.catText}>{item.name}</Text>
+                        </Pressable>
+                    )}
+                    contentContainerStyle={{ paddingBottom: paddingBottom }}
+                />
+            </SwipeableSheet>
+        </>
     );
 };
 

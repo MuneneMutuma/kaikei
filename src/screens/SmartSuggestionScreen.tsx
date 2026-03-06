@@ -11,6 +11,7 @@ import { RootStackParamList } from '../../App';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { Check, ChevronLeft, Calendar, Plus, X } from 'lucide-react-native';
+import { getCategoryIcon, getCategoryColor } from '../utils/categoryHelpers';
 
 type SmartSuggestionScreenRouteProp = RouteProp<RootStackParamList, 'SmartSuggestion'>;
 
@@ -80,7 +81,7 @@ export const SmartSuggestionScreen = () => {
         if (!newCatName.trim()) return;
         setIsAddingCat(true);
         try {
-            const newCat = await repo.addCategory(newCatName.trim(), true);
+            const newCat = await repo.addCategory(newCatName.trim(), [], undefined, true);
             setCategories(prev => [...prev, newCat]); // Optimistic update
             setSelectedCategoryId(newCat.id);
             setAddCatModalVisible(false);
@@ -118,14 +119,6 @@ export const SmartSuggestionScreen = () => {
             .map(date => ({ title: date, data: grouped[date] }));
     }, [transactions]);
 
-    const getCategoryIcon = (catName: string) => {
-        const map: { [key: string]: string } = {
-            'Fuel': '⛽', 'Stock': '📦', 'Food': '🍔', 'Transport': '🚌',
-            'Airtime': '📱', 'Rent': '🏠', 'Utilities': '💡', 'Labor': '👷',
-            'Loans': '🏦', 'Other': '📝'
-        };
-        return map[catName] || '🏷️';
-    };
 
     const renderItem = ({ item }: { item: Expense }) => {
         const isSelected = selectedIds.has(item.id);
@@ -236,7 +229,7 @@ export const SmartSuggestionScreen = () => {
                                 onPress={() => setSelectedCategoryId(item.id)}
                             >
                                 <Text style={[styles.catText, selectedCategoryId === item.id && styles.catTextSelected]}>
-                                    {getCategoryIcon(item.name)} {item.name}
+                                    {React.createElement(getCategoryIcon(item.name), { size: 14, color: selectedCategoryId === item.id ? colors.primary : colors.textSecondary, style: { marginRight: 4 } })} {item.name}
                                 </Text>
                             </TouchableOpacity>
                         )}

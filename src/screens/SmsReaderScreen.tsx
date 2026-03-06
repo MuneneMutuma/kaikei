@@ -7,14 +7,17 @@ import {
   FlatList,
   StyleSheet,
   TouchableOpacity,
-  Modal,
-  Alert,
-  TextInput,
-  RefreshControl,
   ActivityIndicator,
   Switch,
   LayoutAnimation,
+  Pressable,
+  Alert,
+  TextInput,
+  RefreshControl,
+  KeyboardAvoidingView,
+  ScrollView,
 } from "react-native";
+import { SwipeableSheet, SwipeableSheetRef } from '../components/common/SwipeableSheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import SmsAndroid from "react-native-get-sms-android";
@@ -48,7 +51,8 @@ export default function SMSReaderScreen() {
   const [editCategoryId, setEditCategoryId] = useState("");
   const [filterMode, setFilterMode] = useState<'inbox' | 'all'>('inbox');
   const [categories, setCategories] = useState<Category[]>([]);
-  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
+  const bottomSheetRef = useRef<SwipeableSheetRef>(null);
+  const categorySheetRef = useRef<SwipeableSheetRef>(null);
 
   // Helper to know if currently edited item is already synced (so we are editing an EXISTING expense)
   const [existingExpenseId, setExistingExpenseId] = useState<string | null>(null);
@@ -69,6 +73,14 @@ export default function SMSReaderScreen() {
       }
     }, [permissionGranted])
   );
+
+  useEffect(() => {
+    if (detailModalVisible) {
+      bottomSheetRef.current?.present();
+    } else {
+      bottomSheetRef.current?.dismiss();
+    }
+  }, [detailModalVisible]);
 
   const requestSMSPermission = async () => {
     if (Platform.OS === "android") {
@@ -193,7 +205,7 @@ export default function SMSReaderScreen() {
 
     // Confirm
     /* // Optional confirmation
-    Alert.alert("Confirm Import", `Import ${candidates.length} transactions?`, [
+    Alert.alert("Confirm Import", `Import ${ candidates.length } transactions ? `, [
         { text: "Cancel", onPress: () => setLoading(false) },
         { text: "Import", onPress: () => performBulkImport(candidates) }
     ]);
@@ -222,7 +234,7 @@ export default function SMSReaderScreen() {
     setDetailModalVisible(true);
 
     // Reset edit state
-    setEditDescription(tx.direction === 'in' ? `Received from ${tx.from}` : `Paid to ${tx.to || tx.account || 'Unknown'}`);
+    setEditDescription(tx.direction === 'in' ? `Received from ${tx.from} ` : `Paid to ${tx.to || tx.account || 'Unknown'} `);
     setEditCategoryId("");
     setExistingExpenseId(null);
 
@@ -297,10 +309,10 @@ export default function SMSReaderScreen() {
     if (item.type === 'internal' || item.direction === 'internal' || item.type === 'transfer') {
       if (item.from?.toUpperCase() === 'M-PESA') {
         isIncome = false;
-        displayParty = `Transfer to ${item.to || 'Internal'}`;
+        displayParty = `Transfer to ${item.to || 'Internal'} `;
       } else {
         isIncome = true;
-        displayParty = `Transfer from ${item.from || 'Internal'}`;
+        displayParty = `Transfer from ${item.from || 'Internal'} `;
       }
     }
 
@@ -331,7 +343,7 @@ export default function SMSReaderScreen() {
           </Text>
           <View style={styles.metaRow}>
             <Text style={styles.rowSubtitle}>
-              {item.date} • {item.time} {item.account ? `• ${item.account}` : ''}
+              {item.date} • {item.time} {item.account ? `• ${item.account} ` : ''}
             </Text>
           </View>
         </TouchableOpacity>
@@ -403,7 +415,7 @@ export default function SMSReaderScreen() {
 
       <FlatList
         data={filteredData}
-        keyExtractor={(item) => item.tx_id}
+        keyExtractor={(item: MpesaTransaction) => item.tx_id}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
         refreshControl={
@@ -417,244 +429,165 @@ export default function SMSReaderScreen() {
         }
       />
 
-      {/* Details Modal (Bottom Sheet style) */}
-      <Modal
-        visible={detailModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setDetailModalVisible(false)}
+      {/* Details Modal */}
+      <SwipeableSheet
+        ref={bottomSheetRef}
+        onDismiss={() => setDetailModalVisible(false)}
+        title="Transaction Details"
+        snapPoints={['94%']}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setDetailModalVisible(false)}
-        >
-          <View style={styles.drawerContainer}>
-            <View style={styles.drawerHandle} />
-            <Text style={styles.drawerTitle}>Transaction Details</Text>
+        <ScrollView style={{ flex: 1 }}>
+          {selectedTx && (
+            <View style={{ padding: 24 }}>
+              <View style={{ alignItems: 'center', marginBottom: 24 }}>
+                <Text style={{ fontSize: 13, color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600' }}>{selectedTx.type}</Text>
+                <Text style={{ fontSize: 34, fontWeight: 'bold', color: colors.text, marginVertical: 8 }}>
+                  {selectedTx.direction === 'in' ? '+' : '-'} {selectedTx.amount.toLocaleString()}
+                </Text>
+                <Text style={{ fontSize: 16, color: colors.text, fontWeight: '500' }}>
+                  {selectedTx.from || selectedTx.to}
+                </Text>
+              </View>
 
-            {selectedTx && (
-              <View>
-                {/* Header Section */}
-                <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                  <Text style={{ fontSize: 14, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{selectedTx.type}</Text>
-                  <Text style={{ fontSize: 32, fontWeight: 'bold', color: '#111', marginVertical: 5 }}>
-                    {selectedTx.direction === 'in' ? '+' : '-'} {selectedTx.amount.toLocaleString()}
-                  </Text>
-                  <Text style={{ fontSize: 16, color: '#333' }}>
-                    {selectedTx.from || selectedTx.to}
-                  </Text>
+              <View style={styles.detailGrid}>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>Date</Text>
+                  <Text style={styles.detailValue}>{selectedTx.date}</Text>
                 </View>
-
-                {/* Details Grid */}
-                <View style={styles.detailGrid}>
-                  <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>Date</Text>
-                    <Text style={styles.detailValue}>{selectedTx.date}</Text>
-                  </View>
-                  <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>Time</Text>
-                    <Text style={styles.detailValue}>{selectedTx.time}</Text>
-                  </View>
-                  <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>Transaction ID</Text>
-                    <Text style={styles.detailValue}>{selectedTx.tx_id}</Text>
-                  </View>
-                  {selectedTx.account ? (
-                    <View style={styles.detailItem}>
-                      <Text style={styles.detailLabel}>Account / Ref</Text>
-                      <Text style={styles.detailValue}>{selectedTx.account}</Text>
-                    </View>
-                  ) : null}
-                  {selectedTx.tx_cost ? (
-                    <View style={styles.detailItem}>
-                      <Text style={styles.detailLabel}>Fee</Text>
-                      <Text style={styles.detailValue}>{selectedTx.tx_cost}</Text>
-                    </View>
-                  ) : null}
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>Time</Text>
+                  <Text style={styles.detailValue}>{selectedTx.time}</Text>
                 </View>
-
-                {/* Balances */}
-                {(selectedTx.balances?.mpesa || selectedTx.balances?.pochi) && (
-                  <View style={styles.balanceContainer}>
-                    <Text style={styles.balanceTitle}>Balances</Text>
-                    {selectedTx.balances.mpesa !== undefined && (
-                      <View style={styles.rowBetween}>
-                        <Text style={styles.balanceLabel}>M-PESA</Text>
-                        <Text style={styles.balanceValue}>{selectedTx.balances.mpesa.toLocaleString()}</Text>
-                      </View>
-                    )}
-                    {selectedTx.balances.pochi !== undefined && (
-                      <View style={styles.rowBetween}>
-                        <Text style={styles.balanceLabel}>Pochi</Text>
-                        <Text style={styles.balanceValue}>{selectedTx.balances.pochi.toLocaleString()}</Text>
-                      </View>
-                    )}
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>Transaction ID</Text>
+                  <Text style={styles.detailValue}>{selectedTx.tx_id}</Text>
+                </View>
+                {selectedTx.account ? (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Account / Ref</Text>
+                    <Text style={styles.detailValue}>{selectedTx.account}</Text>
                   </View>
-                )}
+                ) : null}
+                {selectedTx.tx_cost ? (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Fee</Text>
+                    <Text style={styles.detailValue}>{selectedTx.tx_cost}</Text>
+                  </View>
+                ) : null}
+              </View>
 
-                {syncedTxIds.has(selectedTx.tx_id) ? (
-                  <>
-                    <View style={styles.divider} />
-                    <Text style={styles.sectionHeader}>Ledger Entry</Text>
+              {(selectedTx.balances?.mpesa || selectedTx.balances?.pochi) && (
+                <View style={styles.balanceContainer}>
+                  <Text style={styles.balanceTitle}>Balances</Text>
+                  {selectedTx.balances.mpesa !== undefined && (
+                    <View style={styles.rowBetween}>
+                      <Text style={styles.balanceLabel}>M-PESA</Text>
+                      <Text style={styles.balanceValue}>KES {selectedTx.balances.mpesa.toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {selectedTx.balances.pochi !== undefined && (
+                    <View style={styles.rowBetween}>
+                      <Text style={styles.balanceLabel}>Pochi</Text>
+                      <Text style={styles.balanceValue}>KES {selectedTx.balances.pochi.toLocaleString()}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
 
-                    <Text style={styles.inputLabel}>Description</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={editDescription}
-                      onChangeText={setEditDescription}
-                    />
-
-                    <Text style={styles.inputLabel}>Category</Text>
-                    <TouchableOpacity
-                      style={styles.input}
-                      onPress={() => setCategoryModalVisible(true)}
-                    >
-                      <Text style={{ color: editCategoryId ? colors.text : '#999' }}>
+              {syncedTxIds.has(selectedTx.tx_id) ? (
+                <View>
+                  <View style={styles.divider} />
+                  <Text style={styles.sectionHeader}>Ledger Entry</Text>
+                  <Text style={styles.inputLabel}>Description</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editDescription}
+                    onChangeText={setEditDescription}
+                    placeholder="Describe this expense..."
+                  />
+                  <Text style={styles.inputLabel}>Category</Text>
+                  <TouchableOpacity
+                    style={styles.input}
+                    onPress={() => categorySheetRef.current?.present()}
+                  >
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ color: editCategoryId ? colors.text : '#999', fontSize: 15 }}>
                         {categories.find(c => c.id === editCategoryId)?.name || 'Select Category'}
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.saveBtn, loading && { opacity: 0.7 }]}
-                      disabled={loading}
-                      onPress={async () => {
-                        if (!existingExpenseId) return;
-                        setLoading(true);
-                        try {
-                          await repo.current.updateExpense(existingExpenseId, {
-                            description: editDescription,
-                            categoryId: editCategoryId,
-                            isVerified: true // Mark as user-verified for future learning
-                          });
-                          Alert.alert("Success", "Entry updated and verified.");
-                          setDetailModalVisible(false);
-                          loadMessages(); // Refresh UI
-                        } catch (e) {
-                          Alert.alert("Error", "Failed to update entry.");
-                        } finally {
-                          setLoading(false);
-                        }
-                      }}
-                    >
-                      {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Changes & Verify</Text>}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.saveBtn, { backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
-                      onPress={async () => {
-                        Alert.alert("Confirm", "Move this to Personal? It will be removed from your business ledger.", [
-                          { text: "Cancel", style: "cancel" },
-                          {
-                            text: "Mark Personal", style: 'destructive', onPress: async () => {
-                              try {
-                                await repo.current.deleteByTransactionId(selectedTx.tx_id);
-                                await repo.current.ignoreTransaction(selectedTx.tx_id);
-                                const nextSynced = new Set(syncedTxIds);
-                                nextSynced.delete(selectedTx.tx_id);
-                                setSyncedTxIds(nextSynced);
-
-                                const nextIgnored = new Set(ignoredTxIds);
-                                nextIgnored.add(selectedTx.tx_id);
-                                setIgnoredTxIds(nextIgnored);
-
-                                setDetailModalVisible(false);
-                                Alert.alert("Moved", "Transaction marked as Personal/Ignored.");
-                              } catch (e) {
-                                Alert.alert("Error", "Failed to move transaction.");
-                              }
-                            }
-                          }
-                        ]);
-                      }}
-                    >
-                      <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Mark as Personal (Ignore)</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <View style={styles.drawerActions}>
-                    <TouchableOpacity
-                      style={[styles.saveBtn, { width: '100%', backgroundColor: colors.primary }]}
-                      onPress={() => {
-                        if (selectedTx) {
-                          setDetailModalVisible(false);
-                          handleMarkBusiness(selectedTx);
-                        }
-                      }}
-                    >
-                      <Text style={styles.saveBtnText}>Import to Business</Text>
-                    </TouchableOpacity>
-
-                    {!ignoredTxIds.has(selectedTx.tx_id) && (
-                      <TouchableOpacity
-                        style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
-                        onPress={async () => {
-                          if (!selectedTx) return;
-                          try {
-                            await repo.current.ignoreTransaction(selectedTx.tx_id);
-                            const nextIgnored = new Set(ignoredTxIds);
-                            nextIgnored.add(selectedTx.tx_id);
-                            setIgnoredTxIds(nextIgnored);
-                            setDetailModalVisible(false);
-                          } catch (e) {
-                            Alert.alert("Error", "Failed to ignore.");
-                          }
-                        }}
-                      >
-                        <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Mark as Personal</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {ignoredTxIds.has(selectedTx.tx_id) && (
-                      <TouchableOpacity
-                        style={[styles.saveBtn, { width: '100%', backgroundColor: '#f5f5f5', marginTop: 12, borderWidth: 1, borderColor: '#ddd' }]}
-                        onPress={async () => {
-                          if (!selectedTx) return;
-                          try {
-                            await repo.current.unIgnoreTransaction(selectedTx.tx_id);
-                            const nextIgnored = new Set(ignoredTxIds);
-                            nextIgnored.delete(selectedTx.tx_id);
-                            setIgnoredTxIds(nextIgnored);
-                            setDetailModalVisible(false);
-                          } catch (e) {
-                            Alert.alert("Error", "Failed to restore.");
-                          }
-                        }}
-                      >
-                        <Text style={[styles.saveBtnText, { color: colors.textSecondary }]}>Restore as Unprocessed</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Category Picker Modal */}
-      <Modal visible={categoryModalVisible} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.drawerContainer, { paddingBottom: 40 }]}>
-            <Text style={styles.drawerTitle}>Select Category</Text>
-            <FlatList
-              data={categories}
-              keyExtractor={c => c.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.catItem} onPress={() => {
-                  setEditCategoryId(item.id);
-                  setCategoryModalVisible(false);
-                }}>
-                  <Text style={styles.catText}>{item.name}</Text>
-                </TouchableOpacity>
+                      <CheckCircle2 size={18} color={colors.textSecondary} />
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.saveBtn, loading && { opacity: 0.7 }]}
+                    disabled={loading}
+                    onPress={async () => {
+                      if (!existingExpenseId) return;
+                      setLoading(true);
+                      try {
+                        await repo.current.updateExpense(existingExpenseId, {
+                          description: editDescription,
+                          categoryId: editCategoryId,
+                          isVerified: true
+                        });
+                        Alert.alert("Success", "Entry updated and verified.");
+                        setDetailModalVisible(false);
+                        loadMessages();
+                      } catch (e) {
+                        Alert.alert("Error", "Failed to update entry.");
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                  >
+                    {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Changes & Verify</Text>}
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.drawerActions}>
+                  <TouchableOpacity
+                    style={[styles.saveBtn, { width: '100%', backgroundColor: colors.primary }]}
+                    onPress={() => {
+                      if (selectedTx) {
+                        setDetailModalVisible(false);
+                        handleMarkBusiness(selectedTx);
+                      }
+                    }}
+                  >
+                    <Text style={styles.saveBtnText}>Import to Business</Text>
+                  </TouchableOpacity>
+                </View>
               )}
-            />
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setCategoryModalVisible(false)}>
-              <Text>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+            </View>
+          )}
+        </ScrollView>
+      </SwipeableSheet>
+
+      {/* Category Picker Sheet */}
+      <SwipeableSheet
+        ref={categorySheetRef}
+        title="Select Category"
+        snapPoints={['50%', '80%']}
+      >
+        <FlatList
+          data={categories}
+          keyExtractor={(c: Category) => c.id}
+          renderItem={({ item }: { item: Category }) => (
+            <Pressable
+              style={styles.catItem}
+              onPress={() => {
+                setEditCategoryId(item.id);
+                categorySheetRef.current?.dismiss();
+              }}
+            >
+              <View style={[styles.catIcon, { backgroundColor: colors.primary + '15' }]}>
+                <Text style={{ fontSize: 16 }}>🏷️</Text>
+              </View>
+              <Text style={styles.catText}>{item.name}</Text>
+            </Pressable>
+          )}
+          contentContainerStyle={{ padding: 16 }}
+        />
+      </SwipeableSheet>
 
     </View >
   );
@@ -782,8 +715,9 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: colors.primary, padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
   saveBtnText: { color: 'white', fontWeight: 'bold' },
 
-  catItem: { padding: 15, borderBottomWidth: 1, borderColor: colors.border },
-  catText: { fontSize: 16, color: colors.text },
+  catItem: { padding: 16, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: colors.border },
+  catIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  catText: { ...typography.body, fontSize: 16 },
   closeBtn: { padding: 15, alignItems: 'center', marginTop: 10 },
   emptyContainer: { alignItems: 'center', marginTop: 80 },
 });

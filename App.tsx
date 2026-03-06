@@ -9,6 +9,7 @@ import { IngestionService } from './src/services/ingestion/IngestionService';
 import { AutoClassifier } from './src/services/intelligence/AutoClassifier';
 import { Database } from './src/services/ledger/Database';
 import { colors } from './src/theme/colors';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 // Screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -23,6 +24,7 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import AddManualExpenseScreen from './src/screens/AddManualExpenseScreen';
 import AiManagementScreen from './src/screens/AiManagementScreen';
 import { BudgetScreen } from './src/screens/BudgetScreen';
+import { BudgetDetailScreen } from './src/screens/BudgetDetailScreen';
 
 // Icons
 import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart, Target } from 'lucide-react-native';
@@ -40,6 +42,7 @@ export type RootStackParamList = {
   SmartSuggestion: { name: string, count: number };
   Profile: undefined;
   AiManagement: undefined;
+  BudgetDetail: { categoryId: string; month: string; spentAmount: number; itemizedAmount: number; limitAmount: number; categoryName: string };
 };
 
 export type MainTabParamList = {
@@ -184,52 +187,55 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer theme={{
-      dark: false,
-      colors: {
-        primary: colors.primary,
-        background: colors.surface, // Default to White for Onboarding/Setup
-        card: 'white',
-        text: '#0d1b12',
-        border: '#e2e8f0',
-        notification: colors.danger,
-      },
-      fonts: {
-        regular: { fontFamily: 'System', fontWeight: '400' },
-        medium: { fontFamily: 'System', fontWeight: '500' },
-        bold: { fontFamily: 'System', fontWeight: '700' },
-        heavy: { fontFamily: 'System', fontWeight: '800' },
-      }
-    }}>
-      <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
-        {isFirstLaunch ? (
-          <>
-            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-            <Stack.Screen name="Setup" component={SetupScreen} />
-            <Stack.Screen name="MainTabs" component={MainTabs} />
-          </>
-        ) : (
-          <>
-            <Stack.Screen name="MainTabs" component={MainTabs} />
-            <Stack.Screen name="Setup" component={SetupScreen} />
-          </>
-        )}
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <NavigationContainer theme={{
+        dark: false,
+        colors: {
+          primary: colors.primary,
+          background: colors.surface, // Default to White for Onboarding/Setup
+          card: 'white',
+          text: '#0d1b12',
+          border: '#e2e8f0',
+          notification: colors.danger,
+        },
+        fonts: {
+          regular: { fontFamily: 'System', fontWeight: '400' },
+          medium: { fontFamily: 'System', fontWeight: '500' },
+          bold: { fontFamily: 'System', fontWeight: '700' },
+          heavy: { fontFamily: 'System', fontWeight: '800' },
+        }
+      }}>
+        <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
+          {isFirstLaunch ? (
+            <>
+              <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+              <Stack.Screen name="Setup" component={SetupScreen} />
+              <Stack.Screen name="MainTabs" component={MainTabs} />
+            </>
+          ) : (
+            <>
+              <Stack.Screen name="MainTabs" component={MainTabs} />
+              <Stack.Screen name="Setup" component={SetupScreen} />
+            </>
+          )}
 
-        {/* Modals & Full Screens */}
-        <Stack.Screen
-          name="AddExpense"
-          component={VoiceInput}
-          options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen
-          name="AddManual"
-          component={AddManualExpenseScreen}
-          options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen name="SmsReader" component={SmsReaderScreen} />
-        <Stack.Screen name="Profile" component={ProfileScreen} />
-        <Stack.Screen name="AiManagement" component={AiManagementScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+          {/* Modals & Full Screens */}
+          <Stack.Screen
+            name="AddExpense"
+            component={VoiceInput}
+            options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+          />
+          <Stack.Screen
+            name="AddManual"
+            component={AddManualExpenseScreen}
+            options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+          />
+          <Stack.Screen name="SmsReader" component={SmsReaderScreen} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
+          <Stack.Screen name="AiManagement" component={AiManagementScreen} />
+          <Stack.Screen name="BudgetDetail" component={BudgetDetailScreen} />
+        </Stack.Navigator>
+      </NavigationContainer >
+    </GestureHandlerRootView >
   );
 }

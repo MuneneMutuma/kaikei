@@ -27,7 +27,8 @@ const { VoiceModule } = NativeModules;
 const voiceEmitter = new NativeEventEmitter(VoiceModule);
 
 import AmountStep from "./AmountStep";
-import CategoryStep, { getCategoryColor, getCategoryIcon } from "./CategoryStep";
+import CategoryStep from "./CategoryStep";
+import { getCategoryColor, getCategoryIcon } from "../utils/categoryHelpers";
 import NoteStep from "./NoteStep";
 import { Category, BudgetBreakdown } from "../services/ledger/Schema";
 
@@ -268,20 +269,24 @@ const AddExpenseScreen: React.FC = () => {
       setSaving(true);
 
       if (isSplit && splits.length > 0) {
-        // Handle Atomic Split
-        const splitEntities = splits.map(s => ({
-          amount: parseFloat(s.amount) || 0,
-          date: date,
-          description: note.trim() || s.categoryName,
+        // Handle Atomic Split (Parent-Child)
+        const allocations = splits.map(s => ({
           categoryId: s.categoryId,
-          source: 'manual' as const,
-          rawText: '',
-          type: 'expense' as const,
-          isBusiness: false,
-          budgetBreakdownId: s.budgetBreakdownId || undefined,
-          parentId: uuidv4() // Generate a common parentId for this group
+          amount: parseFloat(s.amount) || 0,
+          note: note.trim() || s.categoryName
         }));
-        await repo.current.addSplitExpenses(splitEntities);
+
+        await repo.current.addExpense({
+          amount: finalAmount,
+          date: date,
+          description: note.trim() || 'Split Expense',
+          categoryId: selectedCategory.id,
+          source: 'manual',
+          rawText: '',
+          type: 'expense',
+          isBusiness: false,
+          budgetBreakdownId: undefined
+        }, allocations);
       } else {
         // Handle Single Entry
         await repo.current.addExpense({

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, Share, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Share, Platform } from 'react-native';
+import { SwipeableSheet, SwipeableSheetRef } from './common/SwipeableSheet';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 
@@ -13,6 +14,15 @@ interface BackupModalProps {
 }
 
 export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, filePath, error, mode = 'export', restoreCounts }) => {
+    const sheetRef = React.useRef<SwipeableSheetRef>(null);
+
+    React.useEffect(() => {
+        if (visible) {
+            sheetRef.current?.present();
+        } else {
+            sheetRef.current?.dismiss();
+        }
+    }, [visible]);
 
     const handleShare = async () => {
         if (!filePath) return;
@@ -34,71 +44,64 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
         : (isRestore ? 'Restore Complete' : 'Backup Complete');
 
     return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onClose}
+        <SwipeableSheet
+            ref={sheetRef}
+            title={headerTitle}
+            snapPoints={['40%', '60%']}
+            onDismiss={onClose}
         >
-            <View style={styles.overlay}>
-                <View style={styles.card}>
-                    {/* Header */}
-                    <View style={[styles.header, { backgroundColor: headerColor }]}>
-                        <Text style={styles.headerTitle}>
-                            {headerTitle}
-                        </Text>
-                    </View>
-
-                    {/* Content */}
-                    <View style={styles.content}>
-                        {error ? (
-                            <Text style={styles.text}>{error}</Text>
-                        ) : isRestore ? (
-                            <>
-                                <Text style={styles.text}>Your data has been restored successfully.</Text>
-                                {restoreCounts && (
-                                    <View style={styles.pathContainer}>
-                                        <Text style={styles.label}>Restored:</Text>
-                                        <Text style={styles.countRow}>📊 {restoreCounts.expenses} expenses</Text>
-                                        <Text style={styles.countRow}>📁 {restoreCounts.categories} categories</Text>
-                                        <Text style={styles.countRow}>⚙️ {restoreCounts.settings} settings</Text>
-                                        {restoreCounts.ignored > 0 && (
-                                            <Text style={styles.countRow}>🚫 {restoreCounts.ignored} ignored transactions</Text>
-                                        )}
-                                    </View>
-                                )}
-                                <Text style={styles.hint}>
-                                    Restart the app for all changes to take effect.
-                                </Text>
-                            </>
-                        ) : (
-                            <>
-                                <Text style={styles.text}>Your data has been securely exported.</Text>
+            <View style={{ flex: 1 }}>
+                {/* Content */}
+                <View style={styles.content}>
+                    {error ? (
+                        <View style={[styles.errorBox, { backgroundColor: colors.danger + '10' }]}>
+                            <Text style={[styles.text, { color: colors.danger }]}>{error}</Text>
+                        </View>
+                    ) : isRestore ? (
+                        <>
+                            <Text style={styles.text}>Your data has been restored successfully.</Text>
+                            {restoreCounts && (
                                 <View style={styles.pathContainer}>
-                                    <Text style={styles.label}>Saved to:</Text>
-                                    <Text style={styles.path}>{filePath}</Text>
+                                    <Text style={styles.label}>Restored:</Text>
+                                    <Text style={styles.countRow}>📊 {restoreCounts.expenses} expenses</Text>
+                                    <Text style={styles.countRow}>📁 {restoreCounts.categories} categories</Text>
+                                    <Text style={styles.countRow}>⚙️ {restoreCounts.settings} settings</Text>
+                                    {restoreCounts.ignored > 0 && (
+                                        <Text style={styles.countRow}>🚫 {restoreCounts.ignored} ignored transactions</Text>
+                                    )}
                                 </View>
-                                <Text style={styles.hint}>
-                                    Check your "Downloads/KaikeiBackups" folder.
-                                </Text>
-                            </>
-                        )}
-                    </View>
+                            )}
+                            <Text style={styles.hint}>
+                                Restart the app for all changes to take effect.
+                            </Text>
+                        </>
+                    ) : (
+                        <>
+                            <Text style={styles.text}>Your data has been securely exported.</Text>
+                            <View style={styles.pathContainer}>
+                                <Text style={styles.label}>Saved to:</Text>
+                                <Text style={styles.path}>{filePath}</Text>
+                            </View>
+                            <Text style={styles.hint}>
+                                Check your "Downloads/KaikeiBackups" folder.
+                            </Text>
+                        </>
+                    )}
+                </View>
 
-                    {/* Actions */}
-                    <View style={styles.footer}>
-                        {!error && !isRestore && filePath && (
-                            <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleShare}>
-                                <Text style={styles.buttonTextPrimary}>Share / Open</Text>
-                            </TouchableOpacity>
-                        )}
-                        <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={onClose}>
-                            <Text style={styles.buttonTextSecondary}>Close</Text>
+                {/* Actions */}
+                <View style={styles.footer}>
+                    {!error && !isRestore && filePath && (
+                        <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleShare}>
+                            <Text style={styles.buttonTextPrimary}>Share / Open</Text>
                         </TouchableOpacity>
-                    </View>
+                    )}
+                    <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={onClose}>
+                        <Text style={styles.buttonTextSecondary}>Close</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
-        </Modal>
+        </SwipeableSheet>
     );
 };
 
@@ -138,7 +141,11 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: colors.text,
         marginBottom: spacing.md,
-        textAlign: 'center',
+    },
+    errorBox: {
+        padding: spacing.md,
+        borderRadius: 12,
+        marginBottom: spacing.md,
     },
     pathContainer: {
         backgroundColor: colors.background,

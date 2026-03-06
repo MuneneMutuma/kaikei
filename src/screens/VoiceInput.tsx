@@ -10,7 +10,7 @@ import { RootStackParamList } from "../../App";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
 import { Category } from "../services/ledger/Schema";
-import { getCategoryColor, getCategoryIcon } from "./CategoryStep"; // Reuse helpers
+import { getCategoryColor, getCategoryIcon } from "../utils/categoryHelpers";
 
 // --- NATIVE VOICE ENGINE ---
 const { VoiceModule } = NativeModules;
@@ -179,7 +179,8 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                 source: 'voice',
                 rawText: transcript,
                 type: 'expense',
-                isVerified: true
+                isVerified: true,
+                isBusiness: false
             });
             navigation.goBack();
         } catch (e) {
