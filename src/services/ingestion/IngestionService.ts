@@ -16,6 +16,7 @@ import { ExpenseRepository } from '../ledger/ExpenseRepository';
 import { TransactionImporter } from './TransactionImporter';
 import { IngestionEvents, INGESTION_EVENT, CatchUpResult } from './IngestionEvents';
 import { SettingsRepository } from '../settings/SettingsRepository';
+import { NotificationService } from '../notifications/NotificationService';
 
 const { SmsListenerModule } = NativeModules;
 
@@ -72,6 +73,8 @@ class IngestionServiceImpl {
 
         // Re-scan when app comes to foreground
         this.appStateSubscription = AppState.addEventListener('change', this.handleAppStateChange);
+
+        await NotificationService.init();
 
         console.log('[IngestionService] Started successfully');
     }
@@ -163,6 +166,18 @@ class IngestionServiceImpl {
             const result = await this.importer.importTransaction(parsed, source);
             if (result.success && !result.skipped) {
                 console.log(`[IngestionService] Ingested ${parsed.tx_id} (${source})`);
+                
+                // Show popup for real-time expenses
+                if (source === 'auto' && parsed.amount > 0 && result.expense) {
+                    let categoryName = 'Other';
+                    try {
+                        const cats = await this.repo.getAllCategories();
+                        const cat = cats.find(c => c.id === result.expense!.categoryId);
+                        if (cat) categoryName = cat.name;
+                    } catch (e) {}
+                    
+                    await NotificationService.showTransactionPopup(parsed, categoryName);
+                }
             } else if (result.skipped) {
                 console.log(`[IngestionService] Skipped ${parsed.tx_id}: ${result.reason}`);
             }
