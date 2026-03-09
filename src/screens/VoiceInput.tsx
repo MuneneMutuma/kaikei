@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Modal, Alert, NativeModules, NativeEventEmitter, Platform, PermissionsAndroid
+    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Modal, Alert, Platform, PermissionsAndroid
 } from "react-native";
 import { X, Mic, Check, RotateCcw, Settings, Globe } from 'lucide-react-native';
 import { colors } from "../theme/colors";
@@ -10,11 +10,15 @@ import { RootStackParamList } from "../../App";
 import { ExpenseRepository } from "../services/ledger/ExpenseRepository";
 import { NaturalLanguageParser } from "../services/parser/NaturalLanguageParser";
 import { Category } from "../services/ledger/Schema";
-import { getCategoryColor, getCategoryIcon } from "./CategoryStep"; // Reuse helpers
+import { getCategoryColor, getCategoryIcon } from "./CategoryStep";
 
-// --- NATIVE VOICE ENGINE ---
-const { VoiceModule } = NativeModules;
-const voiceEmitter = new NativeEventEmitter(VoiceModule);
+import { getSpeechEngine, registerSpeechEngine, SpeechResult, SpeechEngineState } from '../services/speech/SpeechService';
+import { AndroidGSREngine } from '../services/speech/AndroidGSREngine';
+import { SherpaOnnxEngine } from '../services/speech/SherpaOnnxEngine';
+
+// Initialize the available voice engines
+registerSpeechEngine(new AndroidGSREngine());
+registerSpeechEngine(new SherpaOnnxEngine());
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddExpense'>;
 
@@ -23,11 +27,11 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
     const repo = useRef(new ExpenseRepository());
 
     // State
-    const [isListening, setIsListening] = useState(false);
+    const [language, setLanguage] = useState<'en' | 'sw'>('en');
+    const [engineState, setEngineState] = useState<SpeechEngineState>('idle');
     const [transcript, setTranscript] = useState("");
     const [parsedData, setParsedData] = useState<any>(null);
     const [confidence, setConfidence] = useState(0);
-    const [voiceProcessing, setVoiceProcessing] = useState(false);
     const [saving, setSaving] = useState(false);
 
     const [dbCategories, setDbCategories] = useState<Category[]>([]);
@@ -45,35 +49,22 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
         };
         loadData();
 
-        // Voice Listeners
-        const onSpeechStart = () => setIsListening(true);
-        const onSpeechResults = (e: any) => {
-            if (e.value && e.value[0]) {
-                handleVoiceInput(e.value[0]);
-            }
-        };
-        const onSpeechError = (e: any) => {
-            console.log("Voice Error:", e);
-            setIsListening(false);
-            if (e.code === 7 || e.code === 13) {
-                Alert.alert("Voice Ready", "Offline speech engine is starting or needs its language pack.");
-            }
-        };
-
-        const startListener = voiceEmitter.addListener('onSpeechStart', onSpeechStart);
-        const resultListener = voiceEmitter.addListener('onSpeechResults', onSpeechResults);
-        const errorListener = voiceEmitter.addListener('onSpeechError', onSpeechError);
-
-        // Auto-start listening on mount
-        startListeningSession();
+        // Start session on mount
+        startListeningSession(language);
 
         return () => {
-            startListener.remove();
-            resultListener.remove();
-            errorListener.remove();
-            stopListeningSession();
+            stopListeningSessionActive();
         };
     }, []);
+
+    const engineType = language === 'en' ? 'gsr' : 'sherpa-whisper';
+    const activeEngine = getSpeechEngine(engineType);
+
+    const toggleLanguage = () => {
+        const newLang = language === 'en' ? 'sw' : 'en';
+        setLanguage(newLang);
+        startListeningSession(newLang);
+    };
 
     const requestMicrophonePermission = async () => {
         if (Platform.OS === 'android') {
@@ -97,72 +88,108 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
         return true;
     };
 
-    const startListeningSession = async () => {
-        if (!VoiceModule) {
-            Alert.alert("Voice Error", "Native voice module not found.");
-            return;
-        }
+    const startListeningSession = async (lang: 'en' | 'sw' = language) => {
         const hasPermission = await requestMicrophonePermission();
         if (!hasPermission) {
             Alert.alert("Permission Denied", "Microphone access is required.");
             return;
         }
 
+        const engineToUse = getSpeechEngine(lang === 'en' ? 'gsr' : 'sherpa-whisper');
+
+        // Cancel any active first
+        if (activeEngine.currentState !== 'idle') {
+            await activeEngine.cancelListening();
+        }
+
+        setParsedData(null);
+        setTranscript("");
+
         try {
-            await VoiceModule.startListening({
-                locale: '', // Use system default (often Swahili/English mixed here)
-                preferOffline: true
+            await engineToUse.startListening({
+                language: lang,
+                onStateChange: (state) => setEngineState(state),
+                onPartial: (text) => setTranscript(text),
+                onFinal: (result) => handleVoiceInput(result),
+                onError: (error, code) => {
+                    console.warn(`Voice error [${code}]:`, error);
+                    setEngineState('error');
+                    if (lang === 'sw') {
+                        Alert.alert("Engine Starting", "Downloading/Initializing offline model. Try again in a few seconds.");
+                    }
+                }
             });
-            setIsListening(true);
+
+            // The engine handles its own auto-stop internally via VAD
+            // We just wait for the SpeechService to emit a final result or for the user to press stop
         } catch (e) {
             console.error("Voice Start Error", e);
-            // Alert.alert("Speech Input Error", "Could not start recording.");
         }
     };
 
-    const stopListeningSession = async () => {
-        if (isListening) {
+    const stopListeningSessionActive = async () => {
+        if (engineState === 'listening' || engineState === 'initializing') {
             try {
-                await VoiceModule.stopListening();
-                setIsListening(false);
-            } catch (e) {
-                console.error("Voice Stop Error", e);
+                setEngineState('processing');
+                const result = await activeEngine.stopListening();
+                handleVoiceInput(result);
+            } catch (e: any) {
+                // If it fails to stop (e.g. engine already stopped internally), 
+                // just gracefully ignore to avoid breaking the UI flow.
+                console.warn("Gracefully ignoring Voice Stop Error:", e);
+
+                // If we already have text, we don't want to show an error state
+                if (!transcript || transcript === "(No speech detected)") {
+                    setEngineState('error');
+                }
             }
         }
     };
 
-    const handleVoiceInput = async (text: string) => {
-        setIsListening(false);
-        setVoiceProcessing(true);
-        setTranscript(text);
+    const handleVoiceInput = async (result: SpeechResult) => {
+        setEngineState('processing');
+        const rawText = result.text || "";
+        console.log(`[VoiceInput] Received raw transcript: "${rawText}" (Engine: ${result.engineType})`);
+
+        if (rawText) {
+            setTranscript(rawText);
+        } else {
+            setTranscript("(No speech detected)");
+            setEngineState('idle');
+            return;
+        }
 
         try {
-            const result = await parser.current.parse(text);
+            console.log(`[VoiceInput] Sending to parser...`);
+            const parsed = await parser.current.parse(rawText);
 
-            if (result && result.amount > 0) {
+            if (parsed && parsed.amount > 0) {
+                console.log(`[VoiceInput] Parsed successfully:`, parsed);
                 const currentCats = categoriesRef.current;
-                const cat = currentCats.find(c => c.name.toLowerCase() === result.categoryName?.toLowerCase())
-                    || currentCats.find(c => c.id === result.categoryId)
+                const cat = currentCats.find(c => c.name.toLowerCase() === parsed.categoryName?.toLowerCase())
+                    || currentCats.find(c => c.id === parsed.categoryId)
                     || currentCats.find(c => c.name.toLowerCase() === 'other');
 
-                // Construct Display Data
                 setParsedData({
-                    amount: result.amount,
+                    amount: parsed.amount,
                     category: cat?.name || "Unknown",
                     categoryId: cat?.id,
-                    description: result.description || cat?.name || "Voice Entry",
-                    categoryLocal: cat?.name, // Ideally we would have a local name field
-                    image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDAuShzqrIRst30mOVTEDjx5RIVQlbWdDlLxc93HgHbbiNmyCrEdnmdo9sGQY-2nuF2Wj9T3WA3kwhU33NKpEWNJ1rbXC5x35teLAd7mmddhq4_dwlEjG4YEUkkfR013r9WEXqJODpQ3bhR-ieYxurUg-RtM7KuwdMIfVeHiUr_-NZPt_maLqKCCRJtebLDJrcAk5s2Xm4w0L_ZFlG4xzLVNYnq9kE-vw2_kr1R711giaFO5CG3yjdcqJrRZEr6HkAOaJBCK_JUb36y" // Placeholder
+                    description: parsed.description || cat?.name || "Voice Entry",
+                    categoryLocal: cat?.name,
+                    image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDAuShzqrIRst30mOVTEDjx5RIVQlbWdDlLxc93HgHbbiNmyCrEdnmdo9sGQY-2nuF2Wj9T3WA3kwhU33NKpEWNJ1rbXC5x35teLAd7mmddhq4_dwlEjG4YEUkkfR013r9WEXqJODpQ3bhR-ieYxurUg-RtM7KuwdMIfVeHiUr_-NZPt_maLqKCCRJtebLDJrcAk5s2Xm4w0L_ZFlG4xzLVNYnq9kE-vw2_kr1R711giaFO5CG3yjdcqJrRZEr6HkAOaJBCK_JUb36y"
                 });
-                setConfidence(85 + Math.floor(Math.random() * 15)); // Mock confidence for now as parser doesn't return it yet
+
+                // If engine provided confidence use it, else mock based on parser success
+                setConfidence(result.confidence ? Math.round(result.confidence * 100) : (85 + Math.floor(Math.random() * 15)));
             } else {
-                setTranscript(text + " (Could not understand amount)");
+                console.warn(`[VoiceInput] Parser returned no valid amount for: "${rawText}"`);
+                setTranscript(`"${rawText}"\n\n(Could not extract amount)`);
             }
-        } catch (e) {
-            console.error(e);
-            setTranscript("Error parsing voice input.");
+        } catch (e: any) {
+            console.error("[VoiceInput] Parser threw an exception:", e);
+            setTranscript(`"${rawText}"\n\n(Error extracting amount: ${e.message || "Unknown error"})`);
         } finally {
-            setVoiceProcessing(false);
+            setEngineState('idle');
         }
     };
 
@@ -175,11 +202,12 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                 amount: parsedData.amount,
                 date: date,
                 description: parsedData.description,
-                categoryId: parsedData.categoryId || 'other', // Fallback
+                categoryId: parsedData.categoryId || 'other',
                 source: 'voice',
                 rawText: transcript,
                 type: 'expense',
-                isVerified: true
+                isVerified: true,
+                isBusiness: false
             });
             navigation.goBack();
         } catch (e) {
@@ -193,37 +221,58 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
     const handleRetry = () => {
         setParsedData(null);
         setTranscript("");
-        startListeningSession();
+        setEngineState('idle');
+        startListeningSession(language);
+    };
+
+    // UI Helpers
+    const isListeningNow = engineState === 'listening' || engineState === 'initializing';
+    const isProcessing = engineState === 'processing';
+
+    const getStatusText = () => {
+        if (engineState === 'initializing') return "WARMING UP ENGINE...";
+        if (engineState === 'listening') return language === 'sw' ? "ONGEA SASA..." : "LISTENING...";
+        if (engineState === 'processing') return language === 'sw' ? "INATAFSIRI..." : "PROCESSING...";
+        if (engineState === 'error') return "ERROR. TAP RETRY.";
+        return "DONE";
     };
 
     return (
         <View style={styles.container}>
             {/* Top Bar */}
             <View style={styles.header}>
-                <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
+                <TouchableOpacity style={styles.iconBtn} onPress={() => {
+                    stopListeningSessionActive();
+                    navigation.goBack();
+                }}>
                     <X size={24} color="#0d1b12" />
                 </TouchableOpacity>
 
                 <View style={{ alignItems: 'center' }}>
-                    <Text style={[styles.statusText, isListening && styles.statusPulse]}>
-                        {isListening ? "LISTENING..." : voiceProcessing ? "PROCESSING..." : "DONE"}
+                    <Text style={[styles.statusText, isListeningNow && styles.statusPulse]}>
+                        {getStatusText()}
                     </Text>
-                    <Text style={styles.subStatus}>Inasikiza...</Text>
+                    <Text style={styles.subStatus}>
+                        {language === 'sw' ? "Swahili (Offline)" : "English (Online)"}
+                    </Text>
                 </View>
 
-                <TouchableOpacity style={styles.iconBtn}>
-                    <Settings size={24} color="#94a3b8" />
+                <TouchableOpacity style={[styles.iconBtn, language === 'sw' && styles.iconBtnActive]} onPress={toggleLanguage}>
+                    <Globe size={24} color={language === 'sw' ? colors.primary : "#94a3b8"} />
                 </TouchableOpacity>
             </View>
 
             {/* Main Visualizer */}
-            <View style={styles.visualizerArea}>
-                <View style={[styles.micCircle, isListening && styles.micCircleActive]}>
+            <TouchableOpacity
+                style={styles.visualizerArea}
+                onPress={() => isListeningNow ? stopListeningSessionActive() : startListeningSession(language)}
+                activeOpacity={0.8}
+            >
+                <View style={[styles.micCircle, isListeningNow && styles.micCircleActive, engineState === 'error' && styles.micCircleError]}>
                     <Mic size={48} color="white" />
                 </View>
-                {/* Ripple rings would act here with Reanimated */}
-                {isListening && <View style={styles.ripple} />}
-            </View>
+                {isListeningNow && <View style={styles.ripple} />}
+            </TouchableOpacity>
 
             {/* Transcription */}
             <View style={styles.transcriptArea}>
@@ -231,7 +280,8 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
                     {transcript ? `"${transcript}"` : "..."}
                 </Text>
                 <Text style={styles.translation}>
-                    {parsedData ? `Spent ${parsedData.amount} on ${parsedData.category}` : "Speak clearly in Swahili or English"}
+                    {parsedData ? `Spent ${parsedData.amount} on ${parsedData.category}` :
+                        isProcessing ? "Analyzing speech..." : "Tap mic to speak or wait to process"}
                 </Text>
             </View>
 
@@ -298,19 +348,21 @@ const VoiceInput: React.FC<Props> = ({ navigation }) => {
     );
 };
 
-// Styles from artifact `voice_expense_capture`
+// Styles
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background, justifyContent: 'space-between' },
 
     header: { flexDirection: 'row', justifyContent: 'space-between', padding: 24, paddingTop: 60, alignItems: 'center' },
     iconBtn: { padding: 12, borderRadius: 99, backgroundColor: 'rgba(0,0,0,0.05)' },
+    iconBtnActive: { backgroundColor: 'rgba(19, 236, 91, 0.1)' },
     statusText: { fontSize: 12, fontWeight: 'bold', color: colors.primary, letterSpacing: 1 },
-    statusPulse: { opacity: 0.8 }, // Animation would handle this
+    statusPulse: { opacity: 0.8 },
     subStatus: { fontSize: 12, color: '#64748b' },
 
     visualizerArea: { alignItems: 'center', justifyContent: 'center', height: 160, position: 'relative' },
     micCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', zIndex: 10, shadowColor: colors.primary, shadowOpacity: 0.4, shadowRadius: 20 },
     micCircleActive: { transform: [{ scale: 1.1 }] },
+    micCircleError: { backgroundColor: '#ef4444', shadowColor: '#ef4444' },
     ripple: { position: 'absolute', width: 200, height: 200, borderRadius: 100, backgroundColor: 'rgba(19, 236, 91, 0.1)' },
 
     transcriptArea: { paddingHorizontal: 32, alignItems: 'center', gap: 8 },

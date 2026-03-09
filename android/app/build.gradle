@@ -105,6 +105,12 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+    
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
 }
 
 dependencies {
@@ -113,6 +119,9 @@ dependencies {
     implementation("be.tarsos.dsp:core:2.5")
     implementation("be.tarsos.dsp:jvm:2.5")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    
+    // Core Sherpa-ONNX binaries required by react-native-sherpa-onnx-offline-stt
+    implementation files("../../node_modules/react-native-sherpa-onnx-offline-stt/android/libs/sherpa-onnx-1.12.23.aar")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
