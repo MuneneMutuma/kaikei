@@ -83,12 +83,17 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
 
     useEffect(() => {
         if (visible && transaction) {
-            setDescription(transaction.description || '');
+            // Clean description: remove specific prefixes and any legacy [TAG] markers
+            const cleanDesc = (transaction.description || '')
+                .replace(/^(paid to|received from)\s+/i, '')
+                .replace(/\[.*\]/g, '')
+                .trim();
+
+            setDescription(cleanDesc || transaction.recipient || transaction.sender || '');
             setAmount((transaction.amount ?? 0).toString());
             setCategoryId(transaction.categoryId || '');
             setIsBusiness(transaction.isBusiness || false);
-            setSelectedTagIds(transaction.tags && transaction.tags.length > 0 ? transaction.tags : (transaction.tagId ? [transaction.tagId] : []));
-            setSelectedBreakdownId(transaction.budgetBreakdownId || null);
+            setSelectedTagIds(transaction.tags || []);
 
             (async () => {
                 const cats = await repo.current.getAllCategories(true);
@@ -133,11 +138,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
             const allTags = await budgetRepo.current.getCategoryTags(catId);
             setAvailableTags(allTags);
 
-            // Migration Fallback: If transaction has a breakdown but no tagId yet
-            if (transaction?.budgetBreakdownId && (!transaction.tags || transaction.tags.length === 0) && !transaction.tagId) {
-                const bb = data?.breakdowns.find((b: any) => b.id === transaction.budgetBreakdownId);
-                if (bb && bb.tagId) setSelectedTagIds([bb.tagId]);
-            }
+            // Migration Fallback removed as it uses legacy fields
         } catch (e) {
             console.error("fetchBreakdowns failed", e);
             setBudgetStats(null);
@@ -167,10 +168,6 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
             const data = await budgetRepo.current.getBudgetWithBreakdowns(categoryId, month, false);
             const matchingBreakdown = data?.breakdowns.find((b: any) => b.tagId === newTag.id);
             setSelectedBreakdownId(matchingBreakdown?.id || null);
-
-            // Update description
-            const cleanDesc = (description || '').replace(/\[.*\]/, '').trim();
-            setDescription(`${cleanDesc} [${newTag.name}]`.trim());
 
             setTagModalVisible(false);
             setNewTagName("");
@@ -203,8 +200,6 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                 categoryId,
                 isVerified: true,
                 isBusiness,
-                budgetBreakdownId: !isSplitMode ? (selectedBreakdownId || null) : null,
-                tagId: !isSplitMode ? (selectedTagIds.length > 0 ? selectedTagIds[0] : null) : null,
                 tags: !isSplitMode ? selectedTagIds : []
             });
 
@@ -252,6 +247,23 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
         setShowCategoryPicker(!showCategoryPicker);
     };
 
+    // dateStr must be before any return null
+    const dateStr = useMemo(() => {
+        if (!transaction?.date) return 'Today';
+        const d = new Date(transaction.date);
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+        if (target.getTime() === today.getTime()) return "Today";
+        if (target.getTime() === yesterday.getTime()) return "Yesterday";
+        return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    }, [transaction?.date]);
+
+    const timeStr = transaction?.date ? new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
     if (!transaction) return null;
 
     // Helpers
@@ -264,10 +276,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
 
     const isExpense = transaction.type === 'expense';
     const isEditable = transaction.source === 'voice' || transaction.source === 'manual';
-
-    const dateStr = transaction.date ? new Date(transaction.date).toLocaleDateString([], { day: 'numeric', month: 'short' }) : '';
-    const timeStr = transaction.date ? new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-    const isSplit = !!transaction.parentId;
+    // isSplit based on parentId is legacy
 
     return (
         <SwipeableSheet
@@ -293,7 +302,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                             />
                             <View style={styles.metaRow}>
                                 <Calendar size={12} color={colors.textSecondary} />
-                                <Text style={styles.metaText}>{transaction.date || 'Today'}</Text>
+                                <Text style={styles.metaText}>{dateStr}{timeStr ? `, ${timeStr}` : ''}</Text>
                                 <View style={[styles.inlineBadge, transaction.isVerified ? styles.bgSuccess : styles.bgWarning]}>
                                     <Text style={[styles.badgeText, { color: transaction.isVerified ? colors.success : colors.warning }]}>
                                         {transaction.isVerified ? 'Automated' : 'Manual'}
@@ -363,7 +372,16 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                                 <View style={styles.rowValueGroup}>
                                     <Text style={styles.rowValueText} numberOfLines={1}>
                                         {selectedTagIds.length === 0 ? 'None' :
-                                            selectedTagIds.map((tid: string) => availableTags.find((t: any) => t.id === tid)?.name).filter(Boolean).map((n: any) => formatTagName(n!)).join(', ')
+                                            selectedTagIds.map((tid: string) => {
+                                                const found = availableTags.find((t: any) => t.id === tid);
+                                                if (found) return found.name;
+                                                // Fallback to tagNames passed from repository
+                                                const idx = transaction.tags?.indexOf(tid);
+                                                if (idx !== undefined && idx !== -1 && transaction.tagNames) {
+                                                    return transaction.tagNames[idx];
+                                                }
+                                                return null;
+                                            }).filter(Boolean).map((n: any) => formatTagName(n!)).join(', ')
                                         }
                                     </Text>
                                     <ChevronRight size={16} color={colors.textSecondary} />
@@ -582,23 +600,16 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({ 
                                 key={tag.id}
                                 style={[styles.gridItem, active && { backgroundColor: `${colors.primary}10`, borderColor: colors.primary }]}
                                 onPress={() => {
-                                    let newDesc = (description || '').trim();
-                                    const escapedTagName = tag.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                                    const tagRegex = new RegExp(`\\[${escapedTagName}\\]`, 'gi');
-
                                     if (active) {
                                         setSelectedTagIds(prev => prev.filter(t => t !== tag.id));
-                                        newDesc = newDesc.replace(tagRegex, '').trim();
                                         if (availableBreakdowns.find(b => b.tagId === tag.id)?.id === selectedBreakdownId) {
                                             setSelectedBreakdownId(null);
                                         }
                                     } else {
                                         setSelectedTagIds(prev => [...prev, tag.id]);
-                                        newDesc = `${newDesc} [${tag.name}]`.trim();
                                         const brk = availableBreakdowns.find(b => b.tagId === tag.id);
                                         if (brk) setSelectedBreakdownId(brk.id);
                                     }
-                                    setDescription(newDesc.replace(/\s+/g, ' '));
                                 }}
                             >
                                 <View style={[styles.gridIcon, { backgroundColor: `${colors.primary}15` }]}>

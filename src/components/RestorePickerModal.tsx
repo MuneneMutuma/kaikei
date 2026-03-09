@@ -77,7 +77,7 @@ export const RestorePickerModal: React.FC<RestorePickerModalProps> = ({ visible,
             snapPoints={['50%', '80%']}
             onDismiss={onClose}
         >
-            <View style={{ flex: 1 }}>
+            <View>
                 <View style={styles.content}>
                     {loading ? (
                         <ActivityIndicator size="large" color={colors.primary} style={{ padding: 40 }} />

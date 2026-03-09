@@ -234,6 +234,20 @@ export default function HomeScreen({ navigation }: any) {
               <Text style={styles.actionLabel}>Ask AI</Text>
             </TouchableOpacity>
           </View>
+
+          {/* MOCK NOTIFICATION BUTTON FOR TESTING */}
+          <TouchableOpacity 
+            style={{ marginHorizontal: 20, marginTop: 16, backgroundColor: colors.secondary, padding: 12, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
+            onPress={async () => {
+              const { IngestionService } = require('../services/ingestion/IngestionService');
+              const randomId = Math.floor(Math.random()*10000).toString().padStart(4, '0');
+              const randomAmount = Math.floor(Math.random()*1500) + 100;
+              const rawSms = `J1G10${randomId} Confirmed. Ksh ${randomAmount}.00 paid to Naivas Supermarket on 15/1/25 at 3:00 PM. New M-PESA balance is Ksh 1200.00. Transaction cost, Ksh 0.00.`;
+              await IngestionService.processRawMessage(rawSms, 'auto');
+            }}
+          >
+            <Text style={{ color: 'white', fontWeight: 'bold' }}>🧪 Test M-Pesa Popup</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Budget Snapshot Widget */}

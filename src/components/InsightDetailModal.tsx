@@ -79,7 +79,7 @@ export const InsightDetailModal: React.FC<InsightDetailModalProps> = ({ visible,
             snapPoints={['70%', '90%']}
             onDismiss={onClose}
         >
-            <View style={{ flex: 1 }}>
+            <View>
                 <ScrollView contentContainerStyle={styles.scrollBody}>
                     <View style={styles.header}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>

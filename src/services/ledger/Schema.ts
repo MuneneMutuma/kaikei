@@ -24,10 +24,8 @@ export interface Expense {
     sender?: string;
     recipient?: string;
     account?: string; // e.g. M-Shwari, Pochi, KCB
-    parentId?: string; // New: For Transaction Splitting (links to parent transactionId or id)
-    budgetBreakdownId?: string | null; // Link to a specific budget breakdown/bucket
-    tagId?: string | null; // Legacy field
     tags?: string[]; // Phase 16: Array of Tag IDs for Contextual Multi-Tagging
+    tagNames?: string[]; // Phase 24: Array of Tag Names for UI convenience
     allocations?: ExpenseAllocation[]; // New: Parent-Child splitting
 }
 

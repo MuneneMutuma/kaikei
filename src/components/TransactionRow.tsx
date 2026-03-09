@@ -59,10 +59,9 @@ export const TransactionRow: React.FC<TransactionRowProps> = ({ item, onPress, s
                 </Text>
                 <View style={styles.metaRow}>
                     <Text style={styles.subtitle}>
-                        {timeLabel} • {item.categoryName}{(() => {
-                            const breakdownMatch = item.description.match(/\[(.*?)\]/);
-                            return breakdownMatch ? ` • ${breakdownMatch[1]}` : '';
-                        })()}{sourceContext}
+                        {timeLabel} • {item.categoryName}
+                        {item.tagNames && item.tagNames.length > 0 ? ` • ${item.tagNames.map(n => n.trim()).join(', ')}` : ''}
+                        {sourceContext}
                     </Text>
                 </View>
             </View>

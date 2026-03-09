@@ -24,8 +24,8 @@ export class ExpenseRepository {
             // Use INSERT OR IGNORE to prevent crashing on duplicate transactionIds
             const result = await this.db.execute(
                 `INSERT OR IGNORE INTO expenses (
-                    id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness, parentId, budgetBreakdownId, tagId
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced, isBusiness
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     id,
                     expense.amount,
@@ -41,10 +41,7 @@ export class ExpenseRepository {
                     expense.recipient || null,
                     isVerified ? 1 : 0,
                     0,
-                    isBusiness ? 1 : 0,
-                    expense.parentId || null,
-                    expense.budgetBreakdownId || null,
-                    expense.tagId || null
+                    isBusiness ? 1 : 0
                 ]
             );
 
@@ -96,9 +93,6 @@ export class ExpenseRepository {
             isVerified,
             synced: false,
             isBusiness,
-            parentId: expense.parentId || undefined,
-            budgetBreakdownId: expense.budgetBreakdownId || undefined,
-            tagId: expense.tagId || undefined,
             tags: expense.tags || []
         };
 
@@ -176,7 +170,8 @@ export class ExpenseRepository {
     public async getRecentExpenses(limit: number = 5): Promise<Expense[]> {
         const result = await this.db.execute(
             `SELECT e.*, c.name as categoryName,
-               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr,
+               (SELECT GROUP_CONCAT(ct.name) FROM expense_tags et JOIN category_tags ct ON et.tagId = ct.id WHERE et.expenseId = e.id) as tagNamesArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -190,7 +185,8 @@ export class ExpenseRepository {
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -200,7 +196,8 @@ export class ExpenseRepository {
     public async getAllExpenses(): Promise<Expense[]> {
         const result = await this.db.execute(
             `SELECT e.*, c.name as categoryName,
-               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr,
+               (SELECT GROUP_CONCAT(ct.name) FROM expense_tags et JOIN category_tags ct ON et.tagId = ct.id WHERE et.expenseId = e.id) as tagNamesArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
@@ -212,7 +209,8 @@ export class ExpenseRepository {
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -234,7 +232,8 @@ export class ExpenseRepository {
 
         const result = await this.db.execute(
             `SELECT e.*, c.name as categoryName,
-               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr
+               (SELECT GROUP_CONCAT(tagId) FROM expense_tags et WHERE et.expenseId = e.id) as tagsArr,
+               (SELECT GROUP_CONCAT(ct.name) FROM expense_tags et JOIN category_tags ct ON et.tagId = ct.id WHERE et.expenseId = e.id) as tagNamesArr
            FROM expenses e 
            LEFT JOIN categories c ON e.categoryId = c.id
            WHERE datetime(e.date, 'localtime') LIKE ? 
@@ -248,7 +247,8 @@ export class ExpenseRepository {
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             type: row.type || 'expense',
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -274,8 +274,7 @@ export class ExpenseRepository {
             return {
                 ...row,
                 keywords: JSON.parse(row.keywords),
-                isCustom: !!row.isCustom,
-                parentId: row.parentId || undefined
+                isCustom: !!row.isCustom
             };
         }
         return null;
@@ -286,9 +285,7 @@ export class ExpenseRepository {
      * @param topLevelOnly If true, only returns categories without a parentId (ignores legacy sub-cats)
      */
     public async getAllCategories(topLevelOnly: boolean = false): Promise<Category[]> {
-        const query = topLevelOnly
-            ? 'SELECT * FROM categories WHERE parentId IS NULL ORDER BY name ASC'
-            : 'SELECT * FROM categories ORDER BY name ASC';
+        const query = 'SELECT * FROM categories ORDER BY name ASC';
 
         const result = await this.db.execute(query);
         return Database.getRows(result).map(row => ({
@@ -360,7 +357,7 @@ export class ExpenseRepository {
 
     // --- Updates ---
 
-    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness' | 'budgetBreakdownId' | 'tagId' | 'tags'>>): Promise<void> {
+    async updateExpense(id: string, updates: Partial<Pick<Expense, 'description' | 'categoryId' | 'amount' | 'isVerified' | 'excludeFromAnalytics' | 'isBusiness' | 'tags'>>): Promise<void> {
         const sets: string[] = [];
         const args: any[] = [];
 
@@ -387,14 +384,6 @@ export class ExpenseRepository {
         if (updates.isBusiness !== undefined) {
             sets.push('isBusiness = ?');
             args.push(updates.isBusiness ? 1 : 0);
-        }
-        if (updates.budgetBreakdownId !== undefined) {
-            sets.push('budgetBreakdownId = ?');
-            args.push(updates.budgetBreakdownId);
-        }
-        if (updates.tagId !== undefined) {
-            sets.push('tagId = ?');
-            args.push(updates.tagId);
         }
 
         if (updates.tags !== undefined) {
@@ -497,7 +486,8 @@ export class ExpenseRepository {
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -529,7 +519,8 @@ export class ExpenseRepository {
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -619,7 +610,8 @@ export class ExpenseRepository {
             isVerified: !!row.isVerified,
             excludeFromAnalytics: !!row.excludeFromAnalytics,
             isBusiness: !!row.isBusiness,
-            tags: row.tagsArr ? row.tagsArr.split(',') : []
+            tags: row.tagsArr ? row.tagsArr.split(',') : [],
+            tagNames: row.tagNamesArr ? row.tagNamesArr.split(',') : []
         })) as Expense[];
     }
 
@@ -670,107 +662,146 @@ export class ExpenseRepository {
     }
 
     /**
-     * Export all data for backup — complete DB dump
+     * Export all data for backup — dynamic complete DB dump.
+     * Queries sqlite_master to find all user tables and exports their content.
      */
     public async exportDataAsJSON(): Promise<string> {
-        const expensesResult = await this.db.execute('SELECT * FROM expenses');
-        const expenses = Database.getRows(expensesResult);
+        // 1. Get all user-defined tables
+        const tablesResult = await this.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_metadata'"
+        );
+        const tableNames = Database.getRows(tablesResult).map(row => row.name);
 
-        const categoriesResult = await this.db.execute('SELECT * FROM categories');
-        const categories = Database.getRows(categoriesResult);
+        const tableData: Record<string, any[]> = {};
 
-        const settingsResult = await this.db.execute('SELECT * FROM settings');
-        const settings = Database.getRows(settingsResult);
+        // 2. Fetch data for each table
+        for (const tableName of tableNames) {
+            try {
+                const result = await this.db.execute(`SELECT * FROM ${tableName}`);
+                tableData[tableName] = Database.getRows(result);
+            } catch (e) {
+                console.warn(`[ExpenseRepository] Failed to export table ${tableName}:`, e);
+            }
+        }
 
-        const ignoredResult = await this.db.execute('SELECT * FROM ignored_transactions');
-        const ignored_transactions = Database.getRows(ignoredResult);
-
+        // 3. Construct the export object
         return JSON.stringify({
-            version: 1,
+            version: 2,
             exportedAt: new Date().toISOString(),
-            expenses,
-            categories,
-            settings,
-            ignored_transactions,
+            tables: tableData,
+            // Keep keys for legacy compatibility (optional but helpful for simple parsers)
+            expenses: tableData['expenses'] || [],
+            categories: tableData['categories'] || [],
+            settings: tableData['settings'] || [],
+            ignored_transactions: tableData['ignored_transactions'] || [],
         }, null, 2);
     }
 
     /**
      * Import data from a JSON backup — full restore.
      * Clears all existing data and replaces with the backup.
+     * Supports both dynamic (v2) and legacy (v1) formats.
      */
     public async importDataFromJSON(json: string): Promise<{ expenses: number; categories: number; settings: number; ignored: number }> {
         const data = JSON.parse(json);
-
-        // Validate structure
-        if (!data.expenses || !data.categories) {
-            throw new Error('Invalid backup file: missing expenses or categories.');
-        }
-
         const db = this.db;
 
+        // Determine if it's a dynamic v2 backup or legacy v1
+        const isV2 = data.version >= 2 && data.tables;
+
         try {
-            db.execute('BEGIN TRANSACTION');
+            await db.execute('PRAGMA foreign_keys = OFF');
+            await db.execute('BEGIN TRANSACTION');
 
-            // 1. Clear all tables (children first due to FK)
-            db.execute('DELETE FROM expenses');
-            db.execute('DELETE FROM ignored_transactions');
-            db.execute('DELETE FROM settings');
-            db.execute('DELETE FROM categories');
+            if (isV2) {
+                console.log("[ExpenseRepository] Performing dynamic V2 import...");
+                const tables = data.tables as Record<string, any[]>;
 
-            // 2. Insert categories first (FK dependency for expenses)
-            for (const cat of data.categories) {
-                db.execute(
-                    'INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)',
-                    [cat.id, cat.name, cat.keywords, cat.budgetLimit ?? null, cat.isCustom ?? 0]
-                );
-            }
+                for (const tableName in tables) {
+                    const rows = tables[tableName];
+                    console.log(`[ExpenseRepository] Restoring table: ${tableName} (${rows.length} rows)`);
 
-            // 3. Insert expenses
-            for (const exp of data.expenses) {
-                db.execute(
-                    `INSERT INTO expenses (id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                        exp.id, exp.amount, exp.date, exp.description ?? null,
-                        exp.categoryId, exp.source, exp.rawText ?? null,
-                        exp.transactionId ?? null, exp.excludeFromAnalytics ?? 0,
-                        exp.type ?? 'expense', exp.sender ?? null, exp.recipient ?? null,
-                        exp.isVerified ?? 0, exp.synced ?? 0,
-                    ]
-                );
-            }
+                    // 1. Clear existing data
+                    await db.execute(`DELETE FROM ${tableName}`);
 
-            // 4. Insert settings (if present)
-            if (Array.isArray(data.settings)) {
-                for (const setting of data.settings) {
-                    db.execute(
-                        'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
-                        [setting.key, setting.value]
+                    if (rows.length === 0) continue;
+
+                    // 2. Prepare dynamic insert
+                    const firstRow = rows[0];
+                    const columns = Object.keys(firstRow);
+                    const placeholders = columns.map(() => '?').join(', ');
+                    const insertSql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`;
+
+                    // 3. Insert rows
+                    for (const row of rows) {
+                        const values = columns.map(col => row[col]);
+                        await db.execute(insertSql, values);
+                    }
+                }
+            } else {
+                // FALLBACK: Legacy v1/Legacy logic
+                console.log("[ExpenseRepository] Performing legacy V1 import...");
+                if (!data.expenses || !data.categories) {
+                    throw new Error('Invalid backup file: missing expenses or categories.');
+                }
+
+                // 1. Clear all tables (standard legacy set)
+                await db.execute('DELETE FROM expenses');
+                await db.execute('DELETE FROM ignored_transactions');
+                await db.execute('DELETE FROM settings');
+                await db.execute('DELETE FROM categories');
+
+                // 2. Insert categories
+                for (const cat of data.categories) {
+                    await db.execute(
+                        'INSERT INTO categories (id, name, keywords, budgetLimit, isCustom) VALUES (?, ?, ?, ?, ?)',
+                        [cat.id, cat.name, cat.keywords, cat.budgetLimit ?? null, cat.isCustom ?? 0]
                     );
+                }
+
+                // 3. Insert expenses
+                for (const exp of data.expenses) {
+                    await db.execute(
+                        `INSERT INTO expenses (id, amount, date, description, categoryId, source, rawText, transactionId, excludeFromAnalytics, type, sender, recipient, isVerified, synced)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            exp.id, exp.amount, exp.date, exp.description ?? null,
+                            exp.categoryId, exp.source, exp.rawText ?? null,
+                            exp.transactionId ?? null, exp.excludeFromAnalytics ?? 0,
+                            exp.type ?? 'expense', exp.sender ?? null, exp.recipient ?? null,
+                            exp.isVerified ?? 0, exp.synced ?? 0,
+                        ]
+                    );
+                }
+
+                // 4. Insert settings
+                if (Array.isArray(data.settings)) {
+                    for (const setting of data.settings) {
+                        await db.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [setting.key, setting.value]);
+                    }
+                }
+
+                // 5. Insert ignored
+                if (Array.isArray(data.ignored_transactions)) {
+                    for (const ig of data.ignored_transactions) {
+                        await db.execute('INSERT OR IGNORE INTO ignored_transactions (transactionId) VALUES (?)', [ig.transactionId]);
+                    }
                 }
             }
 
-            // 5. Insert ignored transactions (if present)
-            if (Array.isArray(data.ignored_transactions)) {
-                for (const ig of data.ignored_transactions) {
-                    db.execute(
-                        'INSERT OR IGNORE INTO ignored_transactions (transactionId) VALUES (?)',
-                        [ig.transactionId]
-                    );
-                }
-            }
+            await db.execute('COMMIT');
+            await db.execute('PRAGMA foreign_keys = ON');
 
-            db.execute('COMMIT');
-
+            // Return counts for UI (using legacy keys or mapping from tables)
             return {
-                expenses: data.expenses.length,
-                categories: data.categories.length,
-                settings: data.settings?.length ?? 0,
-                ignored: data.ignored_transactions?.length ?? 0,
+                expenses: (isV2 ? data.tables['expenses'] : data.expenses)?.length ?? 0,
+                categories: (isV2 ? data.tables['categories'] : data.categories)?.length ?? 0,
+                settings: (isV2 ? data.tables['settings'] : data.settings)?.length ?? 0,
+                ignored: (isV2 ? data.tables['ignored_transactions'] : data.ignored_transactions)?.length ?? 0,
             };
         } catch (e) {
-            db.execute('ROLLBACK');
+            await db.execute('ROLLBACK');
+            await db.execute('PRAGMA foreign_keys = ON');
             throw e;
         }
     }

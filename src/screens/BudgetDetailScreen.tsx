@@ -1,20 +1,20 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput as RNTextInput, Alert, Modal, KeyboardAvoidingView, Platform, Animated, Vibration, TouchableOpacity } from 'react-native';
-import { SwipeableSheet, SwipeableSheetRef } from '../components/common/SwipeableSheet';
+import React, { useState, useMemo, useCallback } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Alert, Animated, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
 import { colors } from '../theme/colors';
 import { BudgetRepository } from '../services/ledger/BudgetRepository';
 import { BudgetBreakdown, BudgetLine } from '../services/ledger/Schema';
 import { ChevronLeft, Plus, AlertCircle, Pencil, Trash2, Lock, Unlock, X, CheckCircle, Search, ChevronRight, Link2, Link2Off, MoreHorizontal, Sparkles } from 'lucide-react-native';
 import { getCategoryIcon, getCategoryColor, formatTagName } from '../utils/categoryHelpers';
-import { BudgetSetupModal } from '../components/BudgetSetupModal';
 
 const budgetRepo = new BudgetRepository();
 
 export const BudgetDetailScreen: React.FC = () => {
     const route = useRoute();
-    const navigation = useNavigation();
+    const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
     const { categoryId, month, spentAmount, itemizedAmount, limitAmount, categoryName } = route.params as {
         categoryId: string;
@@ -39,46 +39,15 @@ export const BudgetDetailScreen: React.FC = () => {
     const [breakdowns, setBreakdowns] = useState<BudgetBreakdown[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const [editingBreakdown, setEditingBreakdown] = useState<BudgetBreakdown | null>(null);
-    const [editAmountValue, setEditAmountValue] = useState<string>('');
     const [savingBreakdownId, setSavingBreakdownId] = useState<string | null>(null);
-
+    const [availableTags, setAvailableTags] = useState<{ id: string; name: string }[]>([]);
+    const [editingBreakdown, setEditingBreakdown] = useState<BudgetBreakdown | null>(null);
+    const [editAmountValue, setEditAmountValue] = useState('');
     const [isAddingNew, setIsAddingNew] = useState(false);
-    const [isAddingUnplanned, setIsAddingUnplanned] = useState(false);
-
-    useEffect(() => {
-        if (isAddingNew) {
-            addItemSheetRef.current?.present();
-        } else {
-            addItemSheetRef.current?.dismiss();
-        }
-    }, [isAddingNew]);
-
-    useEffect(() => {
-        if (editingBreakdown) {
-            editActualSheetRef.current?.present();
-        } else {
-            editActualSheetRef.current?.dismiss();
-        }
-    }, [editingBreakdown]);
-
-    useEffect(() => {
-        if (reviewModalVisible) {
-            reviewTransactionsSheetRef.current?.present();
-        } else {
-            reviewTransactionsSheetRef.current?.dismiss();
-        }
-    }, [reviewModalVisible]);
     const [newName, setNewName] = useState('');
     const [newAmount, setNewAmount] = useState('');
     const [addingBreakdown, setAddingBreakdown] = useState(false);
-
-    const [editModalVisible, setEditModalVisible] = useState(false);
-    const [availableTags, setAvailableTags] = useState<{ id: string, name: string }[]>([]);
-
-    const addItemSheetRef = useRef<SwipeableSheetRef>(null);
-    const editActualSheetRef = useRef<SwipeableSheetRef>(null);
-    const reviewTransactionsSheetRef = useRef<SwipeableSheetRef>(null);
+    const [isAddingUnplanned, setIsAddingUnplanned] = useState(false);
 
     // Derived
     const Icon = getCategoryIcon(categoryName);
@@ -177,8 +146,6 @@ export const BudgetDetailScreen: React.FC = () => {
                 text: "Remove", style: "destructive", onPress: async () => {
                     try {
                         await budgetRepo.deleteBreakdownItem(breakdownId);
-                        setEditingBreakdown(null);
-                        setEditAmountValue('');
                         await loadData();
                     } catch (e) {
                         console.error("Failed to delete breakdown", e);
@@ -262,72 +229,9 @@ export const BudgetDetailScreen: React.FC = () => {
     const unaccountedAmount = Math.max(0, safeSpent - accountedTotal);
     const unallocated = limitAmount - plannedTotalEst;
 
-    const handleReviewUnaccounted = async (tagId?: string) => {
-        if (!budgetLineId) return;
-        setTargetTagId(tagId || null);
+    const handleReviewUnaccounted = (tagId: string) => {
+        setTargetTagId(tagId);
         setReviewModalVisible(true);
-        const transactions = await budgetRepo.getTransactionsForReconciliation(categoryId, month);
-        setUnaccountedTransactions(transactions);
-    };
-
-    const handleToggleLink = async (tx: any, currentTagId: string) => {
-        // Check if already linked to THIS specific tag
-        const isLinkedToThis = (tx.directTagId === currentTagId) ||
-            (tx.allocationTags?.split(',').includes(currentTagId));
-
-        if (isLinkedToThis) {
-            // Unlink
-            setClaimingTagId(tx.id);
-            try {
-                await budgetRepo.removeTransactionLink(tx.id, currentTagId);
-                // Vibration.vibrate(50);
-                const transactions = await budgetRepo.getTransactionsForReconciliation(categoryId, month);
-                setUnaccountedTransactions(transactions);
-                loadData();
-            } catch (e) {
-                console.error("Unlink failed", e);
-            } finally {
-                setClaimingTagId(null);
-            }
-        } else {
-            // Link (Claim or Allocate)
-            const remaining = tx.unallocatedBalance ?? tx.amount;
-            if (remaining <= 0) {
-                Alert.alert("No Balance", "This transaction has already been fully allocated.");
-                return;
-            }
-
-            const doLink = async (amount: number) => {
-                setClaimingTagId(tx.id);
-                try {
-                    if (Math.abs(amount - tx.amount) < 0.01 && remaining === tx.amount) {
-                        await budgetRepo.claimTransaction(tx.id, currentTagId);
-                    } else {
-                        await budgetRepo.allocateTransaction(tx.id, categoryId, currentTagId, amount);
-                    }
-                    // Vibration.vibrate(80);
-                    const transactions = await budgetRepo.getTransactionsForReconciliation(categoryId, month);
-                    setUnaccountedTransactions(transactions);
-                    loadData();
-                } catch (e) {
-                    console.error("Link failed", e);
-                    Alert.alert("Error", "Failed to link transaction.");
-                } finally {
-                    setClaimingTagId(null);
-                }
-            };
-
-            // On Android we can't use Prompt, so we default to full remaining amount
-            // Users can adjust the breakdown actuals separately as per their workflow
-            Alert.alert(
-                "Link Transaction",
-                `Link ${formatKes(remaining)} to this item?`,
-                [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Link", onPress: () => doLink(remaining) }
-                ]
-            );
-        }
     };
 
     const handleCleanTags = async () => {
@@ -389,7 +293,7 @@ export const BudgetDetailScreen: React.FC = () => {
                     </Pressable>
 
                     <Pressable
-                        onPress={() => handleReviewUnaccounted()}
+                        onPress={() => navigation.navigate('Reconciliation', { categoryId, month })}
                         style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.7 }]}
                         hitSlop={8}
                     >
@@ -426,7 +330,16 @@ export const BudgetDetailScreen: React.FC = () => {
                     </Pressable>
 
                     <Pressable
-                        onPress={() => !isLocked && setEditModalVisible(true)}
+                        onPress={() => {
+                            if (!isLocked) {
+                                navigation.navigate('BudgetSetup', {
+                                    currentMonth: month,
+                                    initialCategoryId: categoryId,
+                                    initialLimitAmount: limitAmount,
+                                    initialBudgetLineId: budgetLineId || undefined
+                                });
+                            }
+                        }}
                         style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.7 }, isLocked && { opacity: 0.3 }]}
                         disabled={isLocked}
                         hitSlop={8}
@@ -522,8 +435,12 @@ export const BudgetDetailScreen: React.FC = () => {
                                         <Pressable
                                             onPress={() => {
                                                 if (!isLocked) {
-                                                    setEditingBreakdown(item);
-                                                    setEditAmountValue(item.actualAmount ? item.actualAmount.toString() : '');
+                                                    navigation.navigate('EditActualAmount', {
+                                                        breakdownId: item.id,
+                                                        tagName: item.tagName || 'Unknown',
+                                                        currentAmount: item.actualAmount || 0,
+                                                        plannedAmount: item.plannedAmount
+                                                    });
                                                 }
                                             }}
                                             style={styles.actualEntryBtn}
@@ -548,7 +465,7 @@ export const BudgetDetailScreen: React.FC = () => {
                                     </View>
                                     <View style={{ flex: 0.7, alignItems: 'center' }}>
                                         <Pressable
-                                            onPress={() => !isLocked && handleReviewUnaccounted(item.tagId)}
+                                            onPress={() => !isLocked && navigation.navigate('Reconciliation', { categoryId, month })}
                                             style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1, alignItems: 'center' }, isLocked && { opacity: 0.1 }]}
                                             disabled={isLocked}
                                         >
@@ -612,10 +529,13 @@ export const BudgetDetailScreen: React.FC = () => {
 
                         <Pressable
                             onPress={() => {
-                                if (!isLocked) {
-                                    setIsAddingUnplanned(false);
-                                    setIsAddingNew(true);
-                                    setNewAmount('');
+                                if (!isLocked && budgetLineId) {
+                                    navigation.navigate('AddBudgetItem', {
+                                        budgetLineId,
+                                        categoryId,
+                                        isUnplanned: false,
+                                        month
+                                    });
                                 }
                             }}
                             style={[styles.addItemBtn, isLocked && { opacity: 0.3 }]}
@@ -723,10 +643,13 @@ export const BudgetDetailScreen: React.FC = () => {
 
                         <Pressable
                             onPress={() => {
-                                if (!isLocked) {
-                                    setIsAddingUnplanned(true);
-                                    setIsAddingNew(true);
-                                    setNewAmount('0');
+                                if (!isLocked && budgetLineId) {
+                                    navigation.navigate('AddBudgetItem', {
+                                        budgetLineId,
+                                        categoryId,
+                                        isUnplanned: true,
+                                        month
+                                    });
                                 }
                             }}
                             style={[styles.addItemBtn, isLocked && { opacity: 0.3 }]}
@@ -787,295 +710,7 @@ export const BudgetDetailScreen: React.FC = () => {
 
                 <View style={{ height: 40 }} />
             </ScrollView>
-
-            <BudgetSetupModal
-                visible={editModalVisible}
-                onClose={() => setEditModalVisible(false)}
-                onBudgetAdded={() => {
-                    setEditModalVisible(false);
-                    loadData();
-                }}
-                currentMonth={month}
-                initialCategoryId={categoryId}
-                initialLimitAmount={limitAmount}
-                initialBudgetLineId={budgetLineId || undefined}
-            />
-
-            {/* Add Item Modal */}
-            <SwipeableSheet
-                ref={addItemSheetRef}
-                onDismiss={() => { setIsAddingNew(false); setNewName(''); setNewAmount(''); }}
-                title={isAddingUnplanned ? 'Log Unplanned Expense' : 'Add Planned Item'}
-                snapPoints={['65%']}
-            >
-                <ScrollView contentContainerStyle={[styles.modalSheet, { paddingBottom: 60 }]}>
-                    <Text style={styles.modalSubtitle}>
-                        {isAddingUnplanned
-                            ? 'Log a purchase that was not in your original budget.'
-                            : 'Enter the item name and estimated cost.'}
-                    </Text>
-
-                    {/* Tag Suggestions (Entry Options) */}
-                    {availableTags.length > 0 && (
-                        <View style={styles.modalField}>
-                            <Text style={styles.modalLabel}>Entry Options</Text>
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagPicker}>
-                                {availableTags.map((tag) => (
-                                    <TouchableOpacity
-                                        key={tag.id}
-                                        style={[styles.tagChip, newName === tag.name && { backgroundColor: `${colors.primary}15`, borderColor: colors.primary }]}
-                                        onPress={() => setNewName(tag.name)}
-                                    >
-                                        <Text style={[styles.tagChipText, newName === tag.name && { color: colors.primary }]}>{formatTagName(tag.name)}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                        </View>
-                    )}
-
-                    <View style={styles.modalField}>
-                        <Text style={styles.modalLabel}>Item Name</Text>
-                        <RNTextInput
-                            style={styles.modalInput}
-                            placeholder={isAddingUnplanned ? "e.g. Pharmacy, Gift, Emergency" : "e.g. Groceries, Shoes, Bread"}
-                            placeholderTextColor="#94A3B8"
-                            value={newName}
-                            onChangeText={setNewName}
-                            returnKeyType="next"
-                        />
-                    </View>
-
-                    <View style={styles.modalField}>
-                        <Text style={styles.modalLabel}>{isAddingUnplanned ? 'Amount Spent' : 'Estimated Amount'}</Text>
-                        <View style={styles.modalAmountRow}>
-                            <Text style={styles.modalCurrency}>KES</Text>
-                            <RNTextInput
-                                style={styles.modalAmountInput}
-                                placeholder="0"
-                                placeholderTextColor="#94A3B8"
-                                keyboardType="numeric"
-                                value={newAmount}
-                                onChangeText={setNewAmount}
-                                returnKeyType="done"
-                                onSubmitEditing={handleAddNewBreakdown}
-                            />
-                        </View>
-                    </View>
-
-                    <View style={styles.modalActions}>
-                        <TouchableOpacity
-                            onPress={() => { setIsAddingNew(false); setNewName(''); setNewAmount(''); }}
-                            style={styles.modalCancelBtn}
-                        >
-                            <Text style={styles.modalCancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={handleAddNewBreakdown}
-                            style={[
-                                styles.modalSaveBtn,
-                                (!newName.trim() || !newAmount.trim()) && { opacity: 0.4 }
-                            ]}
-                            disabled={!newName.trim() || !newAmount.trim() || addingBreakdown}
-                        >
-                            {addingBreakdown ? (
-                                <ActivityIndicator size="small" color="#0d1b12" />
-                            ) : (
-                                <Text style={styles.modalSaveText}>Add Item</Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-                </ScrollView>
-            </SwipeableSheet>
-
-            {/* Log Actual Amount Modal */}
-            <SwipeableSheet
-                ref={editActualSheetRef}
-                onDismiss={() => { setEditingBreakdown(null); setEditAmountValue(''); }}
-                title="Log Actual Amount"
-                snapPoints={['60%']}
-            >
-                <ScrollView contentContainerStyle={[styles.modalSheet, { paddingBottom: 60 }]}>
-                    {editingBreakdown && (
-                        <View style={styles.actualModalContext}>
-                            <Text style={styles.actualModalItemName}>{editingBreakdown?.tagName}</Text>
-                            <Text style={styles.actualModalEstimate}>Estimated: {formatKes(editingBreakdown?.plannedAmount || 0)}</Text>
-                        </View>
-                    )}
-
-                    <View style={styles.modalField}>
-                        <Text style={styles.modalLabel}>Actual Amount Spent</Text>
-                        <View style={styles.modalAmountRow}>
-                            <Text style={styles.modalCurrency}>KES</Text>
-                            <RNTextInput
-                                style={styles.modalAmountInput}
-                                placeholder="0"
-                                placeholderTextColor="#94A3B8"
-                                keyboardType="numeric"
-                                value={editAmountValue}
-                                onChangeText={setEditAmountValue}
-                                returnKeyType="done"
-                                onSubmitEditing={handleSaveActualAmount}
-                                selectTextOnFocus
-                            />
-                        </View>
-                    </View>
-
-                    <TouchableOpacity
-                        style={styles.verifyBtn}
-                        onPress={() => {
-                            const tagId = editingBreakdown?.tagId;
-                            setEditingBreakdown(null);
-                            setTimeout(() => handleReviewUnaccounted(tagId), 300);
-                        }}
-                    >
-                        <Search size={14} color={colors.primary} />
-                        <Text style={styles.verifyBtnText}>Verify with M-Pesa</Text>
-                    </TouchableOpacity>
-                    <View style={styles.modalActions}>
-                        <TouchableOpacity
-                            onPress={() => { setEditingBreakdown(null); setEditAmountValue(''); }}
-                            style={styles.modalCancelBtn}
-                        >
-                            <Text style={styles.modalCancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={handleSaveActualAmount}
-                            style={styles.modalSaveBtn}
-                            disabled={savingBreakdownId !== null}
-                        >
-                            {savingBreakdownId ? (
-                                <ActivityIndicator size="small" color="#0d1b12" />
-                            ) : (
-                                <Text style={styles.modalSaveText}>Save</Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-                </ScrollView>
-            </SwipeableSheet>
-            {/* Review Unaccounted Modal */}
-            <SwipeableSheet
-                ref={reviewTransactionsSheetRef}
-                onDismiss={() => setReviewModalVisible(false)}
-                title="Transaction Verification"
-                snapPoints={['75%']}
-            >
-                <ScrollView contentContainerStyle={styles.reviewContainer}>
-                    <Text style={styles.reviewSubtitle}>
-                        {targetTagId ? `Verifying: ${formatTagName(breakdowns.find((b: BudgetBreakdown) => b.tagId === targetTagId)?.tagName || '')}` : 'Reviewing all category transactions'}
-                    </Text>
-
-                    {unaccountedTransactions.length === 0 ? (
-                        <View style={styles.noUnclaimed}>
-                            <CheckCircle size={48} color={colors.success} opacity={0.3} />
-                            <Text style={styles.noUnclaimedText}>No transactions found for this period.</Text>
-                        </View>
-                    ) : (
-                        unaccountedTransactions.map((tx: any) => {
-                            const isLinkedToCurrent = targetTagId && (
-                                tx.directTagId === targetTagId ||
-                                (tx.allocationTags && tx.allocationTags.split(',').includes(targetTagId)) ||
-                                (tx.legacyTags && tx.legacyTags.split(',').includes(targetTagId))
-                            );
-
-                            const otherTagNames: string[] = [];
-                            if (tx.directTagName && tx.directTagId !== targetTagId) {
-                                otherTagNames.push(tx.directTagName);
-                            }
-                            if (tx.allocationTagNames) {
-                                const names = tx.allocationTagNames.split(',');
-                                const ids = tx.allocationTags ? tx.allocationTags.split(',') : [];
-                                names.forEach((name: string, index: number) => {
-                                    if (ids[index] !== targetTagId) {
-                                        otherTagNames.push(name);
-                                    }
-                                });
-                            }
-
-                            const dedupedOtherTags = Array.from(new Set(otherTagNames.filter(Boolean)));
-                            const hasOtherLinks = dedupedOtherTags.length > 0;
-                            const isFullyLinkedElsewhere = tx.unallocatedBalance <= 0.01 && !isLinkedToCurrent;
-
-                            return (
-                                <View key={tx.id} style={[
-                                    styles.transactionItem,
-                                    isLinkedToCurrent && { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
-                                    isFullyLinkedElsewhere && { opacity: 0.4 }
-                                ]}>
-                                    <View style={styles.txMain}>
-                                        <View style={{ flex: 1 }}>
-                                            <View style={styles.txHeader}>
-                                                <Text style={styles.txDesc} numberOfLines={1}>{tx.description}</Text>
-                                                <Text style={styles.txAmount}>{formatKes(tx.amount)}</Text>
-                                            </View>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                                                <Text style={styles.txDate}>{new Date(tx.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</Text>
-                                                {tx.unallocatedBalance < tx.amount - 0.01 && (
-                                                    <View style={styles.partialBadge}>
-                                                        <Text style={styles.partialBadgeText}>
-                                                            BAL: {formatKes(tx.unallocatedBalance)}
-                                                        </Text>
-                                                    </View>
-                                                )}
-                                            </View>
-
-                                            {hasOtherLinks && (
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
-                                                    <Text style={{ fontSize: 10, color: colors.textSecondary }}>Also tagged as:</Text>
-                                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-                                                        {dedupedOtherTags.map((name, idx) => (
-                                                            <View key={idx} style={{ paddingHorizontal: 4, paddingVertical: 1, backgroundColor: '#F1F5F9', borderRadius: 4 }}>
-                                                                <Text style={{ fontSize: 9, color: colors.textSecondary }}>{formatTagName(name)}</Text>
-                                                            </View>
-                                                        ))}
-                                                    </View>
-                                                </View>
-                                            )}
-                                        </View>
-
-                                        {targetTagId && !isFullyLinkedElsewhere && (
-                                            <TouchableOpacity
-                                                onPress={() => handleToggleLink(tx, targetTagId)}
-                                                disabled={claimingTagId === tx.id}
-                                                style={styles.toggleLinkBtn}
-                                                hitSlop={15}
-                                            >
-                                                {claimingTagId === tx.id ? (
-                                                    <ActivityIndicator size="small" color="#3B82F6" />
-                                                ) : (
-                                                    isLinkedToCurrent ? (
-                                                        <Link2 size={24} color="#3B82F6" />
-                                                    ) : (
-                                                        <Link2Off size={24} color={colors.textSecondary} />
-                                                    )
-                                                )}
-                                            </TouchableOpacity>
-                                        )}
-                                    </View>
-
-                                    {!targetTagId && !isFullyLinkedElsewhere && (
-                                        <View style={{ marginTop: 12 }}>
-                                            <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, marginBottom: 8, textTransform: 'uppercase' }}>Allocate to:</Text>
-                                            <View style={styles.tagPicker}>
-                                                {breakdowns.map((bb: BudgetBreakdown) => (
-                                                    <TouchableOpacity
-                                                        key={bb.id}
-                                                        style={styles.tagChip}
-                                                        onPress={() => handleToggleLink(tx, bb.tagId)}
-                                                        disabled={claimingTagId === tx.id}
-                                                    >
-                                                        <Text style={styles.tagChipText}>{bb.tagName}</Text>
-                                                    </TouchableOpacity>
-                                                ))}
-                                            </View>
-                                        </View>
-                                    )}
-                                </View>
-                            );
-                        })
-                    )}
-                </ScrollView>
-            </SwipeableSheet>
-        </SafeAreaView >
+        </SafeAreaView>
     );
 };
 
@@ -1322,367 +957,69 @@ const styles = StyleSheet.create({
         textAlign: 'right',
     },
 
-    // Actual Modal Context
-    actualModalContext: {
-        backgroundColor: '#F8FAFC',
-        borderRadius: 12,
-        padding: 14,
-        marginBottom: 20,
-        marginTop: 4,
-    },
-    actualModalItemName: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: colors.text,
-        marginBottom: 4,
-    },
-    actualModalEstimate: {
-        fontSize: 13,
-        color: colors.textSecondary,
-    },
-
-    // Delete Item (in modal)
-    deleteItemBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 12,
-        marginTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: '#F1F5F9',
-        gap: 8,
-    },
-    deleteItemText: {
+    verifyBtnText: {
         fontSize: 14,
         fontWeight: '600',
-        color: colors.danger,
+        color: colors.primary,
     },
-
-    // Empty State
     emptyBreakdown: {
-        paddingVertical: 24,
+        paddingVertical: 20,
         alignItems: 'center',
     },
     emptyText: {
-        fontSize: 14,
+        fontSize: 13,
         color: colors.textSecondary,
-        marginBottom: 4,
+        fontStyle: 'italic',
     },
-    emptySubtext: {
-        fontSize: 12,
-        color: '#94A3B8',
+    verifiedText: {
+        fontSize: 10,
+        fontWeight: '700',
+        marginTop: 2,
     },
-
-
-
     addItemBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 14,
-        marginVertical: 8,
-        borderRadius: 10,
-        backgroundColor: '#F8FAF9',
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-        borderStyle: 'dashed',
-        gap: 8,
+        paddingVertical: 12,
+        gap: 6,
     },
     addItemText: {
         fontSize: 14,
         fontWeight: '600',
         color: colors.primaryDark,
     },
-
-    // Add Item Modal
-    modalOverlay: {
-        flex: 1,
-        justifyContent: 'flex-end',
-        backgroundColor: 'rgba(0,0,0,0.4)',
-    },
-    modalSheet: {
-        backgroundColor: colors.surface,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        paddingHorizontal: 24,
-        paddingTop: 12,
-        paddingBottom: 80,
-    },
-    modalHandle: {
-        width: 40,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: '#D1D5DB',
-        alignSelf: 'center',
-        marginBottom: 20,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: colors.text,
-        marginBottom: 4,
-    },
-    modalSubtitle: {
-        fontSize: 13,
-        color: colors.textSecondary,
-        marginBottom: 24,
-    },
-    modalField: {
-        marginBottom: 20,
-    },
-    modalLabel: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.text,
-        marginBottom: 8,
-    },
-    modalInput: {
-        fontSize: 15,
-        color: colors.text,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        backgroundColor: '#F8FAFC',
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    modalAmountRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F8FAFC',
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-        paddingHorizontal: 16,
-    },
-    modalCurrency: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: colors.textSecondary,
-        marginRight: 8,
-    },
-    modalAmountInput: {
-        flex: 1,
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.text,
-        paddingVertical: 12,
-    },
-    modalActions: {
-        flexDirection: 'row',
-        gap: 12,
-        marginTop: 8,
-    },
-    modalCancelBtn: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 12,
-        alignItems: 'center',
-        backgroundColor: '#F1F5F9',
-    },
-    modalCancelText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: colors.textSecondary,
-    },
-    modalSaveBtn: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 12,
-        alignItems: 'center',
-        backgroundColor: colors.primary,
-    },
-    modalSaveText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#0d1b12',
-    },
-
-    // Reconciliation
     reconCard: {
         backgroundColor: '#1E293B',
         borderRadius: 16,
-        padding: 18,
+        padding: 20,
+        marginTop: 8,
     },
     reconRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        paddingVertical: 6,
+        alignItems: 'center',
+        marginVertical: 4,
     },
     reconLabel: {
         fontSize: 14,
         color: '#94A3B8',
     },
     reconValue: {
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: '600',
-        color: '#E2E8F0',
+        color: '#F8FAFC',
     },
     reconDivider: {
         height: 1,
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: '#334155',
         marginVertical: 12,
     },
     reconSubLabel: {
         fontSize: 13,
-        color: 'rgba(255,255,255,0.7)',
+        color: '#94A3B8',
     },
     reconSubValue: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: 'rgba(255,255,255,0.9)',
-    },
-
-    // Unaccounted Feature Styles
-    unaccountedRow: {
-        backgroundColor: '#F0F9FF',
-        borderBottomWidth: 0,
-        borderRadius: 8,
-        marginVertical: 4,
-    },
-    unaccountedDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: colors.primary,
-        marginRight: 8,
-    },
-    unaccountedText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.primary,
-    },
-    unaccountedValue: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: colors.primary,
-    },
-
-    // Review Modal Styles
-    reviewContainer: {
-        paddingVertical: 20,
-        paddingHorizontal: 20,
-        paddingBottom: 80,
-    },
-    reviewHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 20,
-    },
-    reviewTitle: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: colors.text,
-    },
-    reviewSubtitle: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 2,
-    },
-    transactionItem: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 14,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    txMain: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    txHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 2,
-    },
-    txDesc: {
-        flex: 1,
         fontSize: 14,
-        fontWeight: '700',
-        color: colors.text,
-        marginRight: 10,
-    },
-    txAmount: {
-        fontSize: 14,
-        fontWeight: '800',
-        color: colors.text,
-    },
-    txDate: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    toggleLinkBtn: {
-        width: 44,
-        height: 44,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    partialBadge: {
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        backgroundColor: '#FEF3C7',
-        borderRadius: 4,
-    },
-    partialBadgeText: {
-        fontSize: 9,
-        fontWeight: '800',
-        color: '#92400E',
-    },
-    tagPicker: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    tagChip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        backgroundColor: '#F1F5F9',
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    tagChipText: {
-        fontSize: 12,
-        color: colors.text,
-        fontWeight: '600',
-    },
-    noUnclaimed: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 40,
-        gap: 16,
-    },
-    noUnclaimedText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        textAlign: 'center',
-    },
-    verifiedText: {
-        fontSize: 9,
-        fontWeight: '600',
-        color: colors.primary,
-        marginTop: 1,
-    },
-    verifyBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 12,
-        marginHorizontal: 40,
-        marginBottom: 20,
-        borderRadius: 12,
-        backgroundColor: colors.primary + '10', // Light primary
-        borderWidth: 1,
-        borderColor: colors.primary + '30',
-    },
-    verifyBtnText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.primary,
+        color: '#CBD5E1',
     },
 });

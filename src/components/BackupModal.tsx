@@ -50,7 +50,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
             snapPoints={['40%', '60%']}
             onDismiss={onClose}
         >
-            <View style={{ flex: 1 }}>
+            <View>
                 {/* Content */}
                 <View style={styles.content}>
                     {error ? (

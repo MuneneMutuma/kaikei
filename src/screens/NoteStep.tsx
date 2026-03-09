@@ -132,9 +132,7 @@ const NoteStep: React.FC<Props> = ({
           <View style={styles.tagPanel}>
             <TouchableOpacity
               onPress={() => {
-                const newNote = note.replace(/\[.*\]/g, '').trim();
                 onClearTags?.();
-                setNote(newNote);
               }}
               style={[styles.tagCard, selectedTagIds.length === 0 && { backgroundColor: `${colors.primary} 10`, borderColor: colors.primary }]}
             >
@@ -150,14 +148,7 @@ const NoteStep: React.FC<Props> = ({
                 <TouchableOpacity
                   key={tag.id}
                   onPress={() => {
-                    let newNote = note.trim();
-                    if (active) {
-                      newNote = newNote.replace(`[${tag.name}]`, '').trim();
-                    } else {
-                      newNote = `${newNote} [${tag.name}]`.trim();
-                    }
                     onSelectTag?.(tag.id);
-                    setNote(newNote.replace(/\s+/g, ' '));
                   }}
                   style={[styles.tagCard, active && { backgroundColor: `${colors.primary} 10`, borderColor: colors.primary }]}
                 >

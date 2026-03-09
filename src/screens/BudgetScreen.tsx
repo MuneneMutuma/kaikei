@@ -11,9 +11,12 @@ import { colors } from '../theme/colors';
 import { Plus, LayoutList, TrendingUp, BarChart3 } from 'lucide-react-native';
 import { MonthPicker } from '../components/MonthPicker';
 
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
+
 const budgetRepo = new BudgetRepository();
 
-export const BudgetScreen: React.FC = ({ navigation }: any) => {
+export const BudgetScreen: React.FC<{ navigation: NativeStackNavigationProp<RootStackParamList, 'MainTabs'> }> = ({ navigation }) => {
     const [plannedBudgets, setPlannedBudgets] = useState<BudgetLine[]>([]);
     const [unplannedBudgets, setUnplannedBudgets] = useState<BudgetLine[]>([]);
     const [loading, setLoading] = useState(true);
@@ -87,8 +90,6 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
 
     const handleCreateBudget = () => {
         const today = new Date();
-        const targetDate = new Date(currentMonth + "-01");
-
         const todayIso = today.toISOString().slice(0, 7);
         const maxDate = new Date(today.getFullYear(), today.getMonth() + 2, 1);
         const maxIso = maxDate.toISOString().slice(0, 7);
@@ -101,8 +102,10 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
             Alert.alert("Too Early", "You can only plan budgets up to 2 months in advance.");
             return;
         }
-        setEditBudget(null);
-        setModalVisible(true);
+        
+        navigation.navigate('BudgetSetup', { 
+            currentMonth 
+        });
     };
 
     const handleEditBudget = (budgetLine: BudgetLine) => {
@@ -111,19 +114,13 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
             Alert.alert("View Only", "Budgets for past months cannot be modified.");
             return;
         }
-        setEditBudget(budgetLine);
-        setModalVisible(true);
-    };
-
-    const handleBudgetAdded = () => {
-        setModalVisible(false);
-        setEditBudget(null);
-        loadBudgets(); // Refresh list
-    };
-
-    const handleModalClose = () => {
-        setModalVisible(false);
-        setEditBudget(null);
+        
+        navigation.navigate('BudgetSetup', {
+            currentMonth,
+            initialCategoryId: budgetLine.categoryId,
+            initialLimitAmount: budgetLine.limitAmount,
+            initialBudgetLineId: budgetLine.id
+        });
     };
 
     const renderEmpty = () => {
@@ -281,16 +278,6 @@ export const BudgetScreen: React.FC = ({ navigation }: any) => {
                     <Plus color="#0d1b12" size={32} />
                 </Pressable>
             )}
-
-            <BudgetSetupModal
-                visible={modalVisible}
-                onClose={handleModalClose}
-                onBudgetAdded={handleBudgetAdded}
-                currentMonth={currentMonth}
-                initialCategoryId={editBudget?.categoryId}
-                initialLimitAmount={editBudget?.limitAmount}
-                initialBudgetLineId={editBudget?.id}
-            />
         </View>
     );
 };

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { View, Text, StyleSheet, Platform, PermissionsAndroid, Linking, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Platform, PermissionsAndroid, Linking, Alert, TouchableOpacity, ActivityIndicator, AppState, AppStateStatus } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import notifee, { EventType } from '@notifee/react-native';
 import { SettingsRepository } from './src/services/settings/SettingsRepository';
 import { IngestionService } from './src/services/ingestion/IngestionService';
 import { AutoClassifier } from './src/services/intelligence/AutoClassifier';
@@ -25,6 +27,11 @@ import AddManualExpenseScreen from './src/screens/AddManualExpenseScreen';
 import AiManagementScreen from './src/screens/AiManagementScreen';
 import { BudgetScreen } from './src/screens/BudgetScreen';
 import { BudgetDetailScreen } from './src/screens/BudgetDetailScreen';
+import { BudgetSetupScreen } from './src/screens/BudgetSetupScreen';
+import { AddBudgetItemScreen } from './src/screens/AddBudgetItemScreen';
+import { EditActualAmountScreen } from './src/screens/EditActualAmountScreen';
+import { ReconciliationScreen } from './src/screens/ReconciliationScreen';
+import QuickCategoryScreen from './src/screens/QuickCategoryScreen';
 
 // Icons
 import { LayoutDashboard, Wallet, Mic, Lightbulb, User, Plus, Bike, BarChart3, PieChart, Target } from 'lucide-react-native';
@@ -43,6 +50,11 @@ export type RootStackParamList = {
   Profile: undefined;
   AiManagement: undefined;
   BudgetDetail: { categoryId: string; month: string; spentAmount: number; itemizedAmount: number; limitAmount: number; categoryName: string };
+  BudgetSetup: { currentMonth: string; initialCategoryId?: string; initialLimitAmount?: number; initialBudgetLineId?: string };
+  AddBudgetItem: { budgetLineId: string; categoryId: string; isUnplanned: boolean; month: string };
+  EditActualAmount: { breakdownId: string; tagName: string; currentAmount: number; plannedAmount: number };
+  Reconciliation: { categoryId: string; month: string; tagId?: string };
+  QuickCategory: { txId: string };
 };
 
 export type MainTabParamList = {
@@ -137,6 +149,34 @@ const TripsPlaceholder = () => (
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
+  
+  const navigationRef = useNavigationContainerRef<RootStackParamList>();
+
+  useEffect(() => {
+    const handleAppStateChange = async (nextState: AppStateStatus) => {
+      if (nextState === 'active') {
+        try {
+          const txId = await AsyncStorage.getItem('pendingCategoryTxId');
+          if (txId) {
+            await AsyncStorage.removeItem('pendingCategoryTxId');
+            // Give navigation time to mount
+            setTimeout(() => {
+              if (navigationRef.isReady()) {
+                navigationRef.navigate('QuickCategory', { txId });
+              }
+            }, 300);
+          }
+        } catch (e) {
+          console.error('App: Failed to check pending category popup', e);
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    handleAppStateChange(AppState.currentState);
+
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     const initApp = async () => {
@@ -186,9 +226,48 @@ export default function App() {
     );
   }
 
+  const linking = {
+    prefixes: ['kaikei://'],
+    config: {
+      screens: {
+        QuickCategory: 'category/:txId',
+      },
+    },
+    async getInitialURL() {
+      const url = await Linking.getInitialURL();
+      if (url != null) return url;
+      
+      const initialNotification = await notifee.getInitialNotification();
+      if (initialNotification?.pressAction?.id === 'cat_other' || initialNotification?.pressAction?.id === 'action_change' || initialNotification?.pressAction?.id === 'default') {
+        const txId = initialNotification.notification.data?.tx_id;
+        if (txId) return `kaikei://category/${txId}`;
+      }
+      return null;
+    },
+    subscribe(listener: (url: string) => void) {
+      const onReceiveURL = ({ url }: { url: string }) => listener(url);
+      const linkingSubscription = Linking.addEventListener('url', onReceiveURL);
+      
+      const unsubscribeNotifee = notifee.onForegroundEvent(({ type, detail }) => {
+        if (type === EventType.PRESS || (type === EventType.ACTION_PRESS && (detail.pressAction?.id === 'cat_other' || detail.pressAction?.id === 'action_change'))) {
+          const txId = detail.notification?.data?.tx_id;
+          if (txId) listener(`kaikei://category/${txId}`);
+        }
+      });
+
+      return () => {
+        linkingSubscription.remove();
+        unsubscribeNotifee();
+      };
+    },
+  };
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer theme={{
+      <NavigationContainer 
+        ref={navigationRef}
+        linking={linking}
+        theme={{
         dark: false,
         colors: {
           primary: colors.primary,
@@ -234,6 +313,15 @@ export default function App() {
           <Stack.Screen name="Profile" component={ProfileScreen} />
           <Stack.Screen name="AiManagement" component={AiManagementScreen} />
           <Stack.Screen name="BudgetDetail" component={BudgetDetailScreen} />
+          <Stack.Screen name="BudgetSetup" component={BudgetSetupScreen} />
+          <Stack.Screen name="AddBudgetItem" component={AddBudgetItemScreen} />
+          <Stack.Screen name="EditActualAmount" component={EditActualAmountScreen} />
+          <Stack.Screen name="Reconciliation" component={ReconciliationScreen} />
+          <Stack.Screen 
+            name="QuickCategory" 
+            component={QuickCategoryScreen}
+            options={{ presentation: 'transparentModal', animation: 'fade' }}
+          />
         </Stack.Navigator>
       </NavigationContainer >
     </GestureHandlerRootView >

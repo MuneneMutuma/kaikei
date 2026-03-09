@@ -61,7 +61,7 @@ const AddExpenseScreen: React.FC = () => {
 
   // Transaction Splitting State
   const [isSplit, setIsSplit] = useState(false);
-  const [splits, setSplits] = useState<{ categoryId: string, categoryName: string, amount: string, budgetBreakdownId?: string }[]>([]);
+  const [splits, setSplits] = useState<{ categoryId: string, categoryName: string, amount: string, budgetBreakdownId?: string, tagId?: string }[]>([]);
 
   // Budget Bucket State
   const [availableBreakdowns, setAvailableBreakdowns] = useState<BudgetBreakdown[]>([]);
@@ -272,6 +272,7 @@ const AddExpenseScreen: React.FC = () => {
         // Handle Atomic Split (Parent-Child)
         const allocations = splits.map(s => ({
           categoryId: s.categoryId,
+          tagId: s.tagId,
           amount: parseFloat(s.amount) || 0,
           note: note.trim() || s.categoryName
         }));
@@ -284,11 +285,11 @@ const AddExpenseScreen: React.FC = () => {
           source: 'manual',
           rawText: '',
           type: 'expense',
-          isBusiness: false,
-          budgetBreakdownId: undefined
+          isBusiness: false
         }, allocations);
       } else {
         // Handle Single Entry
+        const tagId = selectedBreakdownId ? availableBreakdowns.find(b => b.id === selectedBreakdownId)?.tagId : undefined;
         await repo.current.addExpense({
           amount: finalAmount,
           date: date,
@@ -298,7 +299,7 @@ const AddExpenseScreen: React.FC = () => {
           rawText: '',
           type: 'expense',
           isBusiness: false,
-          budgetBreakdownId: selectedBreakdownId || undefined
+          tags: tagId ? [tagId] : []
         });
       }
       navigation.goBack();

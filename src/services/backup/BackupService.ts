@@ -63,6 +63,7 @@ export class BackupService {
         const seenPaths = new Set<string>();
 
         for (const dir of potentialDirs) {
+            console.log(`Pontential Dir: ${dir}`);
             try {
                 const exists = await RNFS.exists(dir);
                 console.log(`[BackupService] Checking ${dir} - Exists: ${exists}`);
@@ -71,7 +72,8 @@ export class BackupService {
                 const branch = await RNFS.readDir(dir);
                 console.log(`[BackupService] Found ${branch.length} items in ${dir}`);
                 for (const f of branch) {
-                    if (f.isFile() && f.name.endsWith('.json') && f.name.includes('kaikei_backup') && !seenPaths.has(f.path)) {
+                    console.log(`${f.name}`)
+                    if (f.isFile() && f.name.endsWith('.json') && f.name.includes('kaikei_backup')) {
                         console.log(`[BackupService] Match found: ${f.name}`);
                         allFiles.push({
                             name: f.name,

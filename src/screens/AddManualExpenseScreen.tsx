@@ -148,8 +148,6 @@ const AddManualExpenseScreen: React.FC = () => {
                 type: 'expense',
                 isVerified: true,
                 isBusiness,
-                budgetBreakdownId: selectedBreakdownId || undefined,
-                tagId: selectedTagIds.length > 0 ? selectedTagIds[0] : undefined,
                 tags: selectedTagIds,
                 excludeFromAnalytics: false
             }, allocations);
@@ -226,10 +224,7 @@ const AddManualExpenseScreen: React.FC = () => {
             const matchingBreakdown = data?.breakdowns.find(b => b.tagId === newTag.id);
             setSelectedBreakdownId(matchingBreakdown?.id || null);
 
-            // Update UI/Note
-            const cleanNote = note.replace(/\[.*\]/, '').trim();
-            setNote(`${cleanNote} [${newTag.name}]`.trim());
-
+            // Update UI
             setTagModalVisible(false);
             setNewTagName("");
         } catch (e) {

@@ -295,12 +295,12 @@ export class BudgetRepository {
                 ct.name as rawTagName,
                 -- 1. Sum expenses linked to this tag (direct or via multi-tag table)
                 (SELECT COALESCE(SUM(e.amount), 0) 
-                 FROM expenses e 
-                 WHERE (e.tagId = bb.tagId OR EXISTS (SELECT 1 FROM expense_tags et WHERE et.expenseId = e.id AND et.tagId = bb.tagId))
-                 AND datetime(e.date, 'localtime') LIKE ? 
-                 AND e.type = 'expense'
-                 AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
-                ) as linkedExpenseTotal,
+                  FROM expenses e 
+                  WHERE EXISTS (SELECT 1 FROM expense_tags et WHERE et.expenseId = e.id AND et.tagId = bb.tagId)
+                  AND datetime(e.date, 'localtime') LIKE ? 
+                  AND e.type = 'expense'
+                  AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
+                 ) as linkedExpenseTotal,
                 -- 2. Sum splits/allocations linked to this tag
                 (SELECT COALESCE(SUM(ea.amount), 0) 
                  FROM expense_allocations ea
@@ -455,7 +455,7 @@ export class BudgetRepository {
      * Normalizes names to Title Case and handles case-insensitive lookup.
      */
     public async getOrCreateTag(categoryId: string, name: string): Promise<{ id: string, categoryId: string, name: string }> {
-        const trimmedName = name.trim();
+        const trimmedName = name.trim().toLowerCase();
 
         // Try to find existing first (case-insensitive)
         const existing = await this.db.execute(
@@ -544,8 +544,7 @@ export class BudgetRepository {
                 }
 
                 for (const redundant of toDelete) {
-                    // Update all references
-                    await db.execute('UPDATE expenses SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
+                    // Update references in allocations, breakdowns, and contextual tags
                     await db.execute('UPDATE expense_allocations SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
                     await db.execute('UPDATE budget_breakdowns SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
                     await db.execute('UPDATE expense_tags SET tagId = ? WHERE tagId = ?', [canonical.id, redundant.id]);
@@ -603,8 +602,8 @@ export class BudgetRepository {
             AND e.type = 'expense'
             AND (e.excludeFromAnalytics = 0 OR e.excludeFromAnalytics IS NULL)
             AND (
-                -- 1. Not tagged at all
-                (e.tagId IS NULL AND at.expenseId IS NULL)
+                -- 1. Not tagged at all (no contextual tags AND no allocations)
+                (NOT EXISTS (SELECT 1 FROM expense_tags et WHERE et.expenseId = e.id) AND at.expenseId IS NULL)
                 OR 
                 -- 2. Partially tagged/allocated (has balance left)
                 (e.amount - COALESCE(at.totalAllocated, 0)) > 0.01
@@ -622,9 +621,15 @@ export class BudgetRepository {
      * Assign a tag to an expense, effectively "claiming" it for a breakdown item.
      */
     public async claimTransaction(expenseId: string, tagId: string): Promise<void> {
+        // Insert into multi-tag table instead of the singular column
         await this.db.execute(
-            'UPDATE expenses SET tagId = ?, isVerified = 1 WHERE id = ?',
-            [tagId, expenseId]
+            'INSERT OR IGNORE INTO expense_tags (id, expenseId, tagId) VALUES (?, ?, ?)',
+            [uuidv4(), expenseId, tagId]
+        );
+        // Mark as verified
+        await this.db.execute(
+            'UPDATE expenses SET isVerified = 1 WHERE id = ?',
+            [expenseId]
         );
     }
 
@@ -648,17 +653,11 @@ export class BudgetRepository {
      * This handles both direct tagId on expenses and expense_allocations.
      */
     public async removeTransactionLink(expenseId: string, tagId: string): Promise<void> {
-        // 1. Check if it's a direct tag link
-        const directResult = await this.db.execute(
-            'SELECT id FROM expenses WHERE id = ? AND tagId = ?',
+        // 1. Check and delete from multi-tag table
+        await this.db.execute(
+            'DELETE FROM expense_tags WHERE expenseId = ? AND tagId = ?',
             [expenseId, tagId]
         );
-        if (Database.getRows(directResult).length > 0) {
-            await this.db.execute(
-                'UPDATE expenses SET tagId = NULL WHERE id = ?',
-                [expenseId]
-            );
-        }
 
         // 2. Check and delete allocations
         await this.db.execute(
@@ -682,22 +681,16 @@ export class BudgetRepository {
                 e.*, 
                 c.name as categoryName,
                 CASE 
-                    WHEN e.tagId IS NOT NULL THEN 0 
+                    WHEN EXISTS (SELECT 1 FROM expense_tags et WHERE et.expenseId = e.id) THEN 0 
                     ELSE (e.amount - COALESCE(at.totalAllocated, 0)) 
                 END as unallocatedBalance,
                 -- Return list of current tags for this expense
-                (SELECT GROUP_CONCAT(tagId) FROM expense_tags WHERE expenseId = e.id) as legacyTags,
+                (SELECT GROUP_CONCAT(tagId) FROM expense_tags WHERE expenseId = e.id) as currentTagIds,
                 
                 (SELECT GROUP_CONCAT(ct.name) 
                  FROM expense_tags et 
                  JOIN category_tags ct ON et.tagId = ct.id 
-                 WHERE et.expenseId = e.id) as legacyTagNames,
-                 
-                (SELECT ct.name 
-                 FROM category_tags ct 
-                 WHERE ct.id = e.tagId) as directTagName,
-                 
-                e.tagId as directTagId,
+                 WHERE et.expenseId = e.id) as currentTagNames,
                 
                 (SELECT GROUP_CONCAT(ct.name) 
                  FROM expense_allocations ea 
