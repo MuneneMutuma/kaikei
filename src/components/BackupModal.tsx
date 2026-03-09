@@ -10,7 +10,7 @@ interface BackupModalProps {
     filePath?: string;
     error?: string;
     mode?: 'export' | 'restore';
-    restoreCounts?: { expenses: number; categories: number; settings: number; ignored: number };
+    restoreCounts?: Record<string, number>;
 }
 
 export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, filePath, error, mode = 'export', restoreCounts }) => {
@@ -43,11 +43,16 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
         ? (isRestore ? 'Restore Failed' : 'Backup Failed')
         : (isRestore ? 'Restore Complete' : 'Backup Complete');
 
+    // Helper to format table names for display
+    const formatTableName = (name: string) => {
+        return name.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+    };
+
     return (
         <SwipeableSheet
             ref={sheetRef}
             title={headerTitle}
-            snapPoints={['40%', '60%']}
+            snapPoints={['50%', '80%']}
             onDismiss={onClose}
         >
             <View>
@@ -59,16 +64,15 @@ export const BackupModal: React.FC<BackupModalProps> = ({ visible, onClose, file
                         </View>
                     ) : isRestore ? (
                         <>
-                            <Text style={styles.text}>Your data has been restored successfully.</Text>
-                            {restoreCounts && (
+                            <Text style={styles.text}>Your database has been restored successfully.</Text>
+                            {restoreCounts && Object.keys(restoreCounts).length > 0 && (
                                 <View style={styles.pathContainer}>
-                                    <Text style={styles.label}>Restored:</Text>
-                                    <Text style={styles.countRow}>📊 {restoreCounts.expenses} expenses</Text>
-                                    <Text style={styles.countRow}>📁 {restoreCounts.categories} categories</Text>
-                                    <Text style={styles.countRow}>⚙️ {restoreCounts.settings} settings</Text>
-                                    {restoreCounts.ignored > 0 && (
-                                        <Text style={styles.countRow}>🚫 {restoreCounts.ignored} ignored transactions</Text>
-                                    )}
+                                    <Text style={styles.label}>Restored Tables:</Text>
+                                    {Object.entries(restoreCounts).map(([tableName, count]) => (
+                                        <Text key={tableName} style={styles.countRow}>
+                                            ✅ {formatTableName(tableName)}: {count}
+                                        </Text>
+                                    ))}
                                 </View>
                             )}
                             <Text style={styles.hint}>

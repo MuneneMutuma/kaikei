@@ -31,7 +31,7 @@ export default function ProfileScreen() {
     const [backupPath, setBackupPath] = useState<string | undefined>(undefined);
     const [backupError, setBackupError] = useState<string | undefined>(undefined);
     const [backupMode, setBackupMode] = useState<'export' | 'restore'>('export');
-    const [restoreCounts, setRestoreCounts] = useState<{ expenses: number; categories: number; settings: number; ignored: number } | undefined>(undefined);
+    const [restoreCounts, setRestoreCounts] = useState<Record<string, number> | undefined>(undefined);
     const [restorePickerVisible, setRestorePickerVisible] = useState(false);
 
     // Auto-Import State

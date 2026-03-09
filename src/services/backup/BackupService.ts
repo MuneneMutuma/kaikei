@@ -98,7 +98,7 @@ export class BackupService {
      */
     public async restoreFromFile(filePath: string): Promise<{
         success: boolean;
-        counts?: { expenses: number; categories: number; settings: number; ignored: number };
+        counts?: Record<string, number>;
         error?: string;
     }> {
         console.log(`[BackupService] Starting restore from: ${filePath}`);
@@ -118,12 +118,7 @@ export class BackupService {
 
             const fileContent = await RNFS.readFile(tempPath, 'utf8');
 
-            // Basic validation
-            const parsed = JSON.parse(fileContent);
-            if (!parsed.expenses || !parsed.categories) {
-                return { success: false, error: 'Invalid backup file: missing expenses or categories data.' };
-            }
-
+            // Import data using the repository
             const counts = await this.repo.importDataFromJSON(fileContent);
 
             // Cleanup temp file if we created one
@@ -131,7 +126,7 @@ export class BackupService {
                 await RNFS.unlink(tempPath);
             }
 
-            console.log(`[BackupService] Restore complete: ${counts.expenses} expenses, ${counts.categories} categories`);
+            console.log(`[BackupService] Restore complete. Table counts:`, counts);
             return { success: true, counts };
 
         } catch (error: any) {
