@@ -1,6 +1,6 @@
 # Technical Report: QuickCategoryScreen Polish & Multi-Tagging Migration
 **Date**: 2026-03-09
-**Latest Commit Hash**: `259329c7a390ecd2c648c13f08ee3aa040a264a6`
+**Latest Commit Hash**: `7c984e5088c2275f1067e819b78801f9ce0e88c7`
 
 ## Executive Summary
 This document details the final technical refinements of the Kaikei M-Pesa Expense Assistant, focusing on the `QuickCategoryScreen` stability, the migration to a multi-tagging architecture, and premium UI synchronization across the platform.
@@ -43,6 +43,18 @@ Instead of a crowded header, we moved transaction details into a transparent, ba
   GRID_ITEM_SIZE = (MODAL_WIDTH - (GRID_PADDING * 2) - (GRID_GAP * 2)) / 3
   ```
   This ensures perfectly even horizontal margins and centered cards across all Android device densities.
+
+## 4. Robust Database Backup & Restore Flow
+To ensure data portability and safety, a symmetric, transaction-based backup system was implemented.
+
+### Complete Dynamic Export
+- **Discovery**: Uses `sqlite_master` to query all user-defined tables, automatically including new features (Budgets, Goals, etc.) without manual schema updates.
+- **Format**: V2-JSON structure stores table data in a name-to-rows map, preserving all metadata including `transactionId` and `isVerified` flags.
+
+### Symmetric Restore Integrity
+- **Atomicity**: Wrapped in a single SQLite transaction (`BEGIN TRANSACTION` / `COMMIT`). If any individual table data is corrupt, the entire restore is rolled back to protect the existing database.
+- **Foreign Key Management**: Temporarily relaxes constraints (`PRAGMA foreign_keys = OFF`) to allow a clean wipe-and-reload of interrelated data without throwing dependency errors.
+- **Smart Catch-Up Logic**: Post-restore, the app automatically triggers an `IngestionService.runCatchUpScan()`. This scans for M-Pesa SMS messages received *after* the backup was created but *before* the restore occurred, ensuring no transactions are lost during the transition.
 
 ## 4. Future Maintenance Recommendations
 - **Offline Sync**: While DB initialization is fixed, ensure that any future remote API integrations use a background sync pattern to avoid blocking the main UI thread during "Change" actions.
